@@ -25,6 +25,7 @@
   </div>
   <div id="score-overlay" class="hidden">
     <div class="score-panel">
+      <div class="panel-crown" aria-hidden="true"><img src="/elpres/crown.png" alt=""></div>
       <h2>Round Results</h2>
       <ol id="score-list"></ol>
       <p>Next round starting...</p>
@@ -32,12 +33,20 @@
   </div>
   <div id="alert-overlay" class="hidden">
     <div class="alert-panel">
+      <div class="panel-crown" aria-hidden="true"><img src="/elpres/crown.png" alt=""></div>
       <p id="alert-message"></p>
       <button id="alert-ok" type="button">OK</button>
     </div>
   </div>
+  <div id="waiting-disconnected-overlay" class="hidden">
+    <div class="waiting-disconnected-panel">
+      <p id="waiting-disconnected-message" class="waiting-disconnected-message">Waiting for …</p>
+      <p id="waiting-disconnected-countdown" class="waiting-disconnected-countdown">60</p>
+    </div>
+  </div>
   <div id="lobby-overlay" class="hidden">
     <div class="lobby-panel">
+      <div class="panel-crown" aria-hidden="true"><img src="/elpres/crown.png" alt=""></div>
       <h1 class="lobby-title">El Presidente</h1>
       <p class="lobby-subtitle">Waiting for players... Need at least 2 to start.</p>
       <ul id="lobby-player-list" class="lobby-player-list"></ul>

@@ -8,6 +8,7 @@
 </head>
 <body class="lobby">
   <main>
+    <div class="panel-crown" aria-hidden="true"><img src="/elpres/crown.png" alt=""></div>
     <h1>El Presidente</h1>
     <p class="subtitle">Card game for 2–7 players</p>
     <form id="join-form">
@@ -25,11 +26,16 @@
       const roomInput = document.getElementById('room');
       const nameInput = document.getElementById('name');
       const LAST_ROOM_KEY = 'elpres_last_room';
+      const LAST_NAME_KEY = 'elpres_last_name';
 
       try {
         var lastRoom = localStorage.getItem(LAST_ROOM_KEY);
         if (lastRoom && typeof lastRoom === 'string') {
           roomInput.value = lastRoom;
+        }
+        var lastName = localStorage.getItem(LAST_NAME_KEY);
+        if (lastName && typeof lastName === 'string') {
+          nameInput.value = lastName;
         }
       } catch (_) {}
 
@@ -49,6 +55,7 @@
             if (!id) { alert('Invalid response'); return; }
             try {
               localStorage.setItem(LAST_ROOM_KEY, room);
+              localStorage.setItem(LAST_NAME_KEY, name);
             } catch (_) {}
             window.location.href = '/elpres/room/' + encodeURIComponent(room) + '?id=' + encodeURIComponent(id);
           })

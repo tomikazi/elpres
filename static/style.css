@@ -373,20 +373,25 @@ body.game {
 
 #pass-btn {
   padding: 0.6rem 1.5rem;
-  background: #444;
-  border: 1px solid #666;
+  background: var(--accent);
+  border: 1px solid var(--accent);
   border-radius: 6px;
-  color: var(--text);
+  color: #1a1a1a;
   font-size: 1rem;
+  font-weight: bold;
   cursor: pointer;
 }
 
 #pass-btn:not(:disabled):hover {
-  background: #555;
+  background: #d4af37;
+  border-color: #d4af37;
 }
 
 #pass-btn:disabled {
-  opacity: 0.5;
+  background: #555;
+  border-color: #555;
+  color: #888;
+  opacity: 0.8;
   cursor: not-allowed;
 }
 
@@ -417,6 +422,14 @@ body.game {
   font-size: 1.1rem;
   white-space: nowrap;
   margin-bottom: 0.25rem;
+}
+
+.player-status.player-disconnected {
+  opacity: 0.5;
+}
+
+.player-status.player-disconnected .name {
+  color: var(--text);
 }
 
 .player-status .cards-spread {
@@ -605,7 +618,7 @@ body.game {
 }
 
 /* Overlays */
-#score-overlay, #lobby-overlay {
+#score-overlay, #lobby-overlay, #waiting-disconnected-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.85);
@@ -615,8 +628,45 @@ body.game {
   z-index: 100;
 }
 
-#score-overlay.hidden, #lobby-overlay.hidden {
+#score-overlay.hidden, #lobby-overlay.hidden, #waiting-disconnected-overlay.hidden {
   display: none;
+}
+
+.waiting-disconnected-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--felt);
+  padding: 2rem;
+  border-radius: 12px;
+  border: 1px solid var(--accent);
+}
+
+.waiting-disconnected-message {
+  margin: 0 0 1rem;
+  color: var(--text);
+  font-size: 1.25rem;
+}
+
+.waiting-disconnected-countdown {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: bold;
+  color: var(--accent);
+  min-width: 2.5ch;
+  text-align: center;
+}
+
+.panel-crown {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.panel-crown img {
+  max-width: 64px;
+  max-height: 64px;
+  object-fit: contain;
 }
 
 .score-panel {

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -41,7 +42,6 @@ def load_room(name: str) -> GameRoom | None:
             logger.info("Room detected: %s (minimal file, new room)", name)
             return GameRoom(name=name)
         room = GameRoom.from_dict(data)
-        logger.info("Room loaded: %s (%d players, game=%s)", name, len(room.players), room.current_game is not None)
         return room
     except (json.JSONDecodeError, KeyError):
         logger.info("Room detected: %s (invalid file, new room)", name)
@@ -64,10 +64,12 @@ def _active_player_ids(room_name: str) -> set[str]:
 
 
 def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
-    """Build client-safe state (hide other players' hands)."""
+    """Build client-safe state (hide other players' hands). Lobby list = only currently connected players (no grace period)."""
     g = room.current_game
     if not g:
         active = _active_player_ids(room.name)
+        if player_id:
+            active = active | {player_id}  # so the requesting client sees themselves in the list
         lobby_players = [p for p in room.players if p.id in active]
         return {
             "phase": "no_game",
@@ -82,9 +84,12 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
             player_idx = i
             break
 
-    # Build player views (hide hands for others)
+    # Build player views (hide hands for others); mark disconnected (in grace period) for UI
     players_view = []
     for i, p in enumerate(g.players):
+        key = (room.name, p.id)
+        t = DISCONNECT_TASKS.get(key)
+        disconnected = t is not None and not t.done()
         view = {
             "id": p.id,
             "name": p.name,
@@ -93,6 +98,7 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
             "card_count": len(p.hand),
             "in_results": p.id in g.results,
             "result_position": g.results.index(p.id) + 1 if p.id in g.results else None,
+            "disconnected": disconnected,
         }
         if player_idx is not None and i == player_idx:
             view["hand"] = [c.to_dict() for c in p.hand_sorted()]
@@ -121,7 +127,7 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
         for combo in combos:
             valid_plays.append([c.to_dict() for c in combo])
 
-    return {
+    state = {
         "phase": g.phase.value,
         "room": room.name,
         "dealer_idx": g.dealer_idx,
@@ -129,6 +135,7 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
         "players": players_view,
         "round": {
             "starting_player_idx": g.round.starting_player_idx,
+            "last_play_player_idx": g.round.last_play_player_idx,
             "pile": {"plays": pile_plays},
         },
         "results": g.results,
@@ -136,6 +143,23 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
         "valid_plays": valid_plays,
         "trading": _get_trading_info(g, player_id) if g.phase == GamePhase.Trading else None,
     }
+    # If it's a disconnected player's turn (including when they were already current and then
+    # timed out), include waiting countdown so the "waiting for player" flyover shows for others.
+    if g.phase == GamePhase.Playing and 0 <= g.current_player_idx < len(g.players):
+        current_id = g.players[g.current_player_idx].id
+        key = (room.name, current_id)
+        if key in DISCONNECT_TASKS and (t := DISCONNECT_TASKS.get(key)) and not t.done():
+            start = DISCONNECT_START.get(key)
+            if start is not None:
+                elapsed = time.monotonic() - start
+                secs = max(0, int(DISCONNECT_GRACE_SECONDS - elapsed))
+                state["waiting_for_disconnected"] = {
+                    "player_name": g.players[g.current_player_idx].name,
+                    "seconds_remaining": secs,
+                }
+    if "waiting_for_disconnected" not in state:
+        state["waiting_for_disconnected"] = None
+    return state
 
 
 def _get_trading_info(g: Game, player_id: str | None) -> dict | None:
@@ -264,8 +288,10 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     is_reconnect = False
     logger.info("Player connected: %s (%s)", room_name, name_trimmed)
 
-    key = (room_name, player_id)
+    # Key must match game_state_for_client and heartbeat loop: (room.name, player_id)
+    key = (room.name, player_id)
     old_task = DISCONNECT_TASKS.pop(key, None)
+    DISCONNECT_START.pop(key, None)
     if old_task and not old_task.done():
         old_task.cancel()
 
@@ -276,6 +302,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     await ws.send_json({"type": "state", "state": state, "player_id": player_id})
 
     register_ws(room_name, player_id, ws)
+    LAST_HEARTBEAT[(room_name, player_id)] = time.monotonic()
 
     # Notify others (skip player_joined for reconnect - they're not new)
     if not is_reconnect:
@@ -293,7 +320,19 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                         break
                     data = json.loads(msg.data)
                     cmd = data.get("type")
-                    if cmd == "leave":
+                    LAST_HEARTBEAT[(room_name, player_id)] = time.monotonic()
+                    if cmd == "heartbeat":
+                        key = (room.name, player_id)
+                        if key in DISCONNECT_TASKS:
+                            old_task = DISCONNECT_TASKS.pop(key, None)
+                            DISCONNECT_START.pop(key, None)
+                            if old_task and not old_task.done():
+                                old_task.cancel()
+                            await broadcast_state(room_name, room_obj=room)
+                    elif cmd == "state_request":
+                        state = game_state_for_client(room, player_id)
+                        await ws.send_json({"type": "state", "state": state, "player_id": player_id})
+                    elif cmd == "leave":
                         voluntary_leave = True
                         await force_remove_player(room_name, room, player_id)
                         try:
@@ -335,10 +374,24 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 break
     finally:
         unregister_ws(room_name, player_id)
+        LAST_HEARTBEAT.pop((room_name, player_id), None)
         logger.info("Player left room: %s (%s)", room_name, name_trimmed)
         if not voluntary_leave:
-            task = asyncio.create_task(delayed_remove_after_disconnect(room_name, player_id))
-            DISCONNECT_TASKS[(room_name, player_id)] = task
+            room = load_room(room_name)
+            if room and room.current_game is None:
+                # Lobby: no grace period; remove immediately so list updates for everyone
+                room.players = [p for p in room.players if p.id != player_id]
+                save_room(room)
+                await broadcast_state(room_name, room_obj=room)
+            else:
+                # Game in progress: 60s reconnect grace before ejecting
+                key = (room.name, player_id)
+                DISCONNECT_START[key] = time.monotonic()
+                task = asyncio.create_task(delayed_remove_after_disconnect(room_name, player_id))
+                DISCONNECT_TASKS[key] = task
+                # Notify other players so they see this player as disconnected and, if their turn, the flyover
+                await broadcast_state(room_name, exclude=player_id, room_obj=room)
+                await broadcast_except(room_name, player_id, {"type": "player_disconnected", "player_id": player_id})
         await ws.close()
 
     return ws
@@ -460,8 +513,13 @@ async def start_next_game_after_delay(room: GameRoom):
 
 # WebSocket broadcast tracking
 WS_CLIENTS: dict[str, dict[str, web.WebSocketResponse]] = {}  # room -> {player_id -> ws}
+# Last heartbeat time per connected player: (room_name, player_id) -> time.monotonic()
+LAST_HEARTBEAT: dict[tuple[str, str], float] = {}
+HEARTBEAT_TIMEOUT_SECONDS = 7
 # Disconnect grace period: (room_name, player_id) -> asyncio.Task to remove after 60s
 DISCONNECT_TASKS: dict[tuple[str, str], asyncio.Task] = {}
+# When each grace period started (for countdown): (room_name, player_id) -> time.monotonic()
+DISCONNECT_START: dict[tuple[str, str], float] = {}
 DISCONNECT_GRACE_SECONDS = 60
 
 
@@ -512,21 +570,31 @@ async def broadcast_state(room: str, exclude: str | None = None, room_obj: GameR
             if not ws.closed:
                 state = game_state_for_client(room_obj, pid)
                 await ws.send_json({"type": "state", "state": state, "player_id": pid})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Failed to send state to %s in %s: %s", pid, room, e)
 
 
 async def delayed_remove_after_disconnect(room_name: str, player_id: str) -> None:
     """After DISCONNECT_GRACE_SECONDS, remove player from game/room if they did not reconnect."""
     await asyncio.sleep(DISCONNECT_GRACE_SECONDS)
-    key = (room_name, player_id)
+    room = load_room(room_name)
+    # Use same key as heartbeat loop and game_state_for_client: (room.name, player_id)
+    key = (room.name, player_id) if room else (room_name, player_id)
     DISCONNECT_TASKS.pop(key, None)
+    DISCONNECT_START.pop(key, None)
+    LAST_HEARTBEAT.pop((room_name, player_id), None)
     if (room_name, player_id) in WS_CLIENTS.get(room_name, {}):
         return
-    room = load_room(room_name)
     if not room:
         return
     await force_remove_player(room_name, room, player_id)
+    # Close their WebSocket so client knows they were ejected
+    wses = WS_CLIENTS.get(room_name, {})
+    if player_id in wses:
+        try:
+            await wses[player_id].close()
+        except Exception:
+            pass
 
 
 async def force_remove_player(room_name: str, room: GameRoom, player_id: str) -> None:
@@ -556,12 +624,50 @@ async def force_remove_player(room_name: str, room: GameRoom, player_id: str) ->
     logger.info("Player force-removed: %s (%s)", room_name, player_id)
 
 
+async def heartbeat_check_loop():
+    """Every few seconds, mark players who missed a heartbeat as disconnected and start grace period."""
+    while True:
+        await asyncio.sleep(2)
+        now = time.monotonic()
+        for room_name, clients in list(WS_CLIENTS.items()):
+            room = load_room(room_name)
+            if not room or not room.current_game:
+                continue
+            for pid, ws in list(clients.items()):
+                if ws.closed:
+                    continue
+                # Use room.name so the key matches game_state_for_client (room.name, p.id)
+                key = (room.name, pid)
+                if key in DISCONNECT_TASKS:
+                    continue
+                last = LAST_HEARTBEAT.get((room_name, pid), 0)
+                if now - last > HEARTBEAT_TIMEOUT_SECONDS:
+                    DISCONNECT_START[key] = time.monotonic()
+                    task = asyncio.create_task(delayed_remove_after_disconnect(room_name, pid))
+                    DISCONNECT_TASKS[key] = task
+                    other_count = sum(1 for p in WS_CLIENTS[room_name] if p != pid and not WS_CLIENTS[room_name][p].closed)
+                    logger.info(
+                        "Heartbeat timeout: %s (%s) - grace period started, notifying %s other client(s)",
+                        room_name, pid, other_count,
+                    )
+                    # Push state to other players so they see this player as disconnected and, if
+                    # it's their turn, the waiting-for-player flyover.
+                    await broadcast_state(room_name, exclude=pid, room_obj=room)
+                    # Fallback: notify others so they can request state if the push was missed
+                    await broadcast_except(room_name, pid, {"type": "player_disconnected", "player_id": pid})
+
+
 async def redirect_to_lobby(_request: web.Request) -> web.Response:
     raise web.HTTPFound("/elpres/")
 
 
 def create_app() -> web.Application:
     app = web.Application()
+
+    async def on_startup(_app):
+        asyncio.create_task(heartbeat_check_loop())
+
+    app.on_startup.append(on_startup)
     app.router.add_get("/", redirect_to_lobby)
     app.router.add_get("/elpres", redirect_to_lobby)
     app.router.add_get("/elpres/", handle_static)

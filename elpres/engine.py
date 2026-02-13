@@ -277,7 +277,13 @@ class GameEngine:
 
         if not player.hand:
             game.results.append(player.id)
-            # Round continues; advance to next player with cards (round ends only when all pass)
+            # If no other player has cards, round ends immediately (winner need not pass)
+            n = len(game.players)
+            others_with_cards = [i for i in range(n) if i != player_idx and game.players[i].hand]
+            if not others_with_cards:
+                winner_idx = game.round.last_play_player_idx if game.round.last_play_player_idx >= 0 else player_idx
+                self._start_new_round(game, winner_idx)
+                return None
 
         n = len(game.players)
         next_idx = (player_idx + 1) % n
@@ -288,6 +294,10 @@ class GameEngine:
 
         if next_idx == player_idx:
             # No one left with cards (everyone went out) - round over, start next round
+            winner_idx = game.round.last_play_player_idx if game.round.last_play_player_idx >= 0 else player_idx
+            self._start_new_round(game, winner_idx)
+        elif not game.players[next_idx].hand:
+            # Next player has no cards (e.g. went out) - end round so pile clears
             winner_idx = game.round.last_play_player_idx if game.round.last_play_player_idx >= 0 else player_idx
             self._start_new_round(game, winner_idx)
         else:
@@ -305,10 +315,10 @@ class GameEngine:
         n = len(game.players)
         next_idx = (player_idx + 1) % n
 
-        # Check if round is over (all others passed)
+        # Round over only when everyone has passed or has no cards (everyone got a chance to play)
         in_play = [i for i in range(n) if game.players[i].hand and i not in game.passed_this_round]
-        if len(in_play) <= 1:
-            # Round over - last player to make a play wins the round
+        if len(in_play) == 0:
+            # All passed or out - last player to make a play wins the round
             winner_idx = game.round.last_play_player_idx if game.round.last_play_player_idx >= 0 else player_idx
             self._start_new_round(game, winner_idx)
             return None
@@ -318,6 +328,16 @@ class GameEngine:
                 break
             next_idx = (next_idx + 1) % n
 
+        if next_idx == player_idx:
+            # No next player (everyone passed or out) - end round so pile clears
+            winner_idx = game.round.last_play_player_idx if game.round.last_play_player_idx >= 0 else player_idx
+            self._start_new_round(game, winner_idx)
+            return None
+        # Never give turn to a player with no cards; end round so pile clears
+        if not game.players[next_idx].hand:
+            winner_idx = game.round.last_play_player_idx if game.round.last_play_player_idx >= 0 else player_idx
+            self._start_new_round(game, winner_idx)
+            return None
         game.current_player_idx = next_idx
         return None
 
@@ -336,6 +356,9 @@ class GameEngine:
             start_idx = (winner_idx + 1) % n
             while start_idx != winner_idx and not game.players[start_idx].hand:
                 start_idx = (start_idx + 1) % n
+            # If everyone went out, don't give turn to winner (no cards); next player leads
+            if start_idx == winner_idx:
+                start_idx = (winner_idx + 1) % n
         game.round.starting_player_idx = start_idx
         game.current_player_idx = start_idx
 

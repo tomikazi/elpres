@@ -22,6 +22,8 @@
   let pendingPlay = [];
   let ws = null;
   let dontReconnect = false;
+  let heartbeatIntervalId = null;
+  const HEARTBEAT_INTERVAL_MS = 5000;
 
   const container = document.getElementById('game-container');
   const pileContainer = document.getElementById('card-pile-container');
@@ -43,6 +45,12 @@
   const leaveCancelBtn = document.getElementById('leave-cancel-btn');
   const leaveConfirmBtn = document.getElementById('leave-confirm-btn');
   const logoutBtn = document.getElementById('logout-btn');
+  const waitingDisconnectedOverlay = document.getElementById('waiting-disconnected-overlay');
+  const waitingDisconnectedMessage = document.getElementById('waiting-disconnected-message');
+  const waitingDisconnectedCountdown = document.getElementById('waiting-disconnected-countdown');
+
+  let waitingDisconnectedIntervalId = null;
+  let waitingDisconnectedSeconds = 0;
 
   function showAlert(message) {
     alertMessage.textContent = message;
@@ -120,7 +128,18 @@
   }
 
   function connect() {
+    if (heartbeatIntervalId) {
+      clearInterval(heartbeatIntervalId);
+      heartbeatIntervalId = null;
+    }
     ws = new WebSocket(wsUrl);
+    ws.onopen = () => {
+      heartbeatIntervalId = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'heartbeat' }));
+        }
+      }, HEARTBEAT_INTERVAL_MS);
+    };
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
@@ -134,6 +153,10 @@
             pendingPlay.length = 0;
           }
           render();
+        } else if (msg.type === 'player_disconnected') {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'state_request' }));
+          }
         } else if (msg.type === 'player_joined') {
           if (state) {
             state.players = state.players || [];
@@ -147,8 +170,10 @@
           showScoreScreen(msg.results || []);
         } else if (msg.type === 'error') {
           console.error(msg.message);
-          dontReconnect = true;
-          alertMessage.dataset.redirect = '1';
+          if (msg.message !== 'Not your turn') {
+            dontReconnect = true;
+            alertMessage.dataset.redirect = '1';
+          }
           showAlert(msg.message);
         } else if (msg.type === 'you_left') {
           dontReconnect = true;
@@ -159,6 +184,10 @@
       }
     };
     ws.onclose = () => {
+      if (heartbeatIntervalId) {
+        clearInterval(heartbeatIntervalId);
+        heartbeatIntervalId = null;
+      }
       if (!dontReconnect) setTimeout(connect, 2000);
     };
   }
@@ -177,7 +206,7 @@
       let acc = '';
       if (pos === 1) acc = ' 👑';
       if (pos === players.length) acc = ' 💩';
-      return `<li>${pos}. ${p.name}${acc}</li>`;
+      return `<li>${p.name}${acc}</li>`;
     }).join('');
     scoreOverlay.classList.remove('hidden');
     setTimeout(() => {
@@ -213,6 +242,31 @@
     const myIdx = players.findIndex(p => p.id === playerId);
     const isMyTurn = g.current_player_idx === myIdx && g.phase === 'Playing';
     const validPlays = g.valid_plays || [];
+
+    const w = state.waiting_for_disconnected;
+    const isWaitingForMe = w && g.current_player_idx === myIdx;
+    if (w && w.player_name != null && !isWaitingForMe) {
+      waitingDisconnectedMessage.textContent = 'Waiting for ' + escapeHtml(w.player_name) + '…';
+      waitingDisconnectedSeconds = typeof w.seconds_remaining === 'number' ? w.seconds_remaining : 60;
+      waitingDisconnectedCountdown.textContent = String(waitingDisconnectedSeconds);
+      waitingDisconnectedOverlay.classList.remove('hidden');
+      if (!waitingDisconnectedIntervalId) {
+        waitingDisconnectedIntervalId = setInterval(() => {
+          waitingDisconnectedSeconds = Math.max(0, waitingDisconnectedSeconds - 1);
+          waitingDisconnectedCountdown.textContent = String(waitingDisconnectedSeconds);
+          if (waitingDisconnectedSeconds <= 0 && waitingDisconnectedIntervalId) {
+            clearInterval(waitingDisconnectedIntervalId);
+            waitingDisconnectedIntervalId = null;
+          }
+        }, 1000);
+      }
+    } else {
+      waitingDisconnectedOverlay.classList.add('hidden');
+      if (waitingDisconnectedIntervalId) {
+        clearInterval(waitingDisconnectedIntervalId);
+        waitingDisconnectedIntervalId = null;
+      }
+    }
 
     if (g.phase === 'Trading' && g.trading) {
       renderTradePile(g, myIdx);
@@ -411,6 +465,7 @@
     const pileEmpty = pilePlays.length === 0;
     const mustDefinePlay = pileEmpty && isMyTurn;
     const hasValidPending = pendingPlayMatchesValidPlay(g);
+    const lastPlayByMe = g.round?.last_play_player_idx === myIdx && !pileEmpty;
 
     if (mustDefinePlay) {
       passBtn.textContent = 'End My Turn';
@@ -418,7 +473,7 @@
       passBtn.classList.toggle('can-end-turn', hasValidPending);
     } else if (pendingPlay.length > 0 && !hasValidPending) {
       passBtn.disabled = true;
-      passBtn.textContent = 'Pass';
+      passBtn.textContent = lastPlayByMe ? 'Clear the Pile' : 'Pass';
       passBtn.classList.remove('can-end-turn');
     } else if (hasValidPending) {
       passBtn.disabled = false;
@@ -426,7 +481,7 @@
       passBtn.classList.add('can-end-turn');
     } else {
       passBtn.disabled = false;
-      passBtn.textContent = 'Pass';
+      passBtn.textContent = lastPlayByMe ? 'Clear the Pile' : 'Pass';
       passBtn.classList.remove('can-end-turn');
     }
   }
@@ -468,7 +523,7 @@
       const x = 50 + radius * Math.cos(angle);
       const y = 50 - radius * Math.sin(angle);
       const div = document.createElement('div');
-      div.className = 'player-status';
+      div.className = 'player-status' + (p.disconnected ? ' player-disconnected' : '');
       div.style.left = `${x}%`;
       div.style.top = `${y}%`;
       let accIcon = '';
@@ -477,8 +532,9 @@
       if (p.accolade === 'VP') accIcon = '⭐';
       const pos = p.result_position === 1 ? ' 👑' : (p.result_position ? ` (#${p.result_position})` : '');
       const showAccIcon = (p.result_position === 1 && accIcon === '👑') ? '' : accIcon;
+      const zzz = p.disconnected ? ' 😴' : '';
       div.innerHTML = `
-        <div class="name">${escapeHtml(p.name)}${pos} ${showAccIcon}</div>
+        <div class="name">${escapeHtml(p.name)}${pos} ${showAccIcon}${zzz}</div>
         <div class="cards-spread">${renderMiniCards(p.card_count || 0)}</div>
       `;
       playersEl.appendChild(div);
