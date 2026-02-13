@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "elpres"
+version = "0.1.0"
+description = "El Presidente card game - web-based multiplayer"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.9.0",
+]
+
+[project.scripts]
+elpres = "elpres.main:run"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["elpres*"]

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>El Presidente - Lobby</title>
+  <link rel="stylesheet" href="/elpres/style.css">
+</head>
+<body class="lobby">
+  <main>
+    <h1>El Presidente</h1>
+    <p class="subtitle">Card game for 2–7 players</p>
+    <form id="join-form">
+      <label for="room">Room name</label>
+      <input type="text" id="room" name="room" placeholder="Enter room name" required autocomplete="off">
+      <label for="name">Your name</label>
+      <input type="text" id="name" name="name" placeholder="Your name" required maxlength="50" value="">
+      <button type="submit" id="join-btn">Enter</button>
+    </form>
+  </main>
+  <script src="/elpres/app.js"></script>
+  <script>
+    (function() {
+      const form = document.getElementById('join-form');
+      const roomInput = document.getElementById('room');
+      const nameInput = document.getElementById('name');
+      const LAST_ROOM_KEY = 'elpres_last_room';
+
+      try {
+        var lastRoom = localStorage.getItem(LAST_ROOM_KEY);
+        if (lastRoom && typeof lastRoom === 'string') {
+          roomInput.value = lastRoom;
+        }
+      } catch (_) {}
+
+      function goToRoom() {
+        const room = roomInput.value.trim();
+        const name = nameInput.value.trim();
+        if (!room || !name) return;
+        const url = '/elpres/join?room=' + encodeURIComponent(room) + '&name=' + encodeURIComponent(name);
+        fetch(url)
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.error) {
+              alert(data.error);
+              return;
+            }
+            var id = data.id;
+            if (!id) { alert('Invalid response'); return; }
+            try {
+              localStorage.setItem(LAST_ROOM_KEY, room);
+            } catch (_) {}
+            window.location.href = '/elpres/room/' + encodeURIComponent(room) + '?id=' + encodeURIComponent(id);
+          })
+          .catch(function() { alert('Could not join room'); });
+      }
+
+      form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        goToRoom();
+        return false;
+      });
+      document.getElementById('join-btn').addEventListener('click', function(e) {
+        e.preventDefault();
+        goToRoom();
+      });
+    })();
+  </script>
+</body>
+</html>

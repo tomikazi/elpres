@@ -1,0 +1,9 @@
+#!/bin/bash
+
+docker stop elpres || true
+docker rm elpres || true
+
+docker run --name elpres -d -p 8765:8765 \
+    --restart=unless-stopped \
+    -v /tmp/elpres:/elpres \
+    elpres:local

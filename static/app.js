@@ -1,0 +1,763 @@
+(function() {
+  const path = window.location.pathname;
+  const isGame = path.startsWith('/elpres/room/');
+  if (!isGame) return;
+
+  const params = new URLSearchParams(window.location.search);
+  const playerIdFromUrl = params.get('id') || '';
+  const roomMatch = path.match(/\/elpres\/room\/([^/]+)/);
+  const roomName = roomMatch ? decodeURIComponent(roomMatch[1]) : '';
+
+  if (!roomName || !playerIdFromUrl.trim()) {
+    window.location.href = '/elpres/';
+    return;
+  }
+
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsHost = window.location.host;
+  const wsUrl = `${wsProtocol}//${wsHost}/elpres/ws?room=${encodeURIComponent(roomName)}&id=${encodeURIComponent(playerIdFromUrl.trim())}`;
+
+  let state = null;
+  let playerId = null;
+  let pendingPlay = [];
+  let ws = null;
+  let dontReconnect = false;
+
+  const container = document.getElementById('game-container');
+  const pileContainer = document.getElementById('card-pile-container');
+  const pileEl = document.getElementById('card-pile');
+  const pileDropZone = document.getElementById('pile-drop-zone');
+  const handEl = document.getElementById('player-hand');
+  const handContainer = document.getElementById('player-hand-container');
+  const passBtn = document.getElementById('pass-btn');
+  const playersEl = document.getElementById('players-status');
+  const scoreOverlay = document.getElementById('score-overlay');
+  const scoreList = document.getElementById('score-list');
+  const lobbyOverlay = document.getElementById('lobby-overlay');
+  const lobbyPlayerList = document.getElementById('lobby-player-list');
+  const startGameBtn = document.getElementById('start-game-btn');
+  const alertOverlay = document.getElementById('alert-overlay');
+  const alertMessage = document.getElementById('alert-message');
+  const alertOk = document.getElementById('alert-ok');
+  const leaveConfirmOverlay = document.getElementById('leave-confirm-overlay');
+  const leaveCancelBtn = document.getElementById('leave-cancel-btn');
+  const leaveConfirmBtn = document.getElementById('leave-confirm-btn');
+  const logoutBtn = document.getElementById('logout-btn');
+
+  function showAlert(message) {
+    alertMessage.textContent = message;
+    alertOverlay.classList.remove('hidden');
+  }
+
+  function hideAlert() {
+    alertOverlay.classList.add('hidden');
+  }
+
+  alertOk.addEventListener('click', () => {
+    hideAlert();
+    if (alertMessage.dataset.redirect) {
+      window.location.href = '/elpres/';
+    }
+  });
+
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', () => {
+      if (state && state.phase === 'no_game') {
+        dontReconnect = true;
+        window.location.href = '/elpres/';
+        return;
+      }
+      leaveConfirmOverlay.classList.remove('hidden');
+    });
+  }
+  if (leaveCancelBtn) {
+    leaveCancelBtn.addEventListener('click', () => {
+      leaveConfirmOverlay.classList.add('hidden');
+    });
+  }
+  if (leaveConfirmBtn) {
+    leaveConfirmBtn.addEventListener('click', () => {
+      leaveConfirmOverlay.classList.add('hidden');
+      dontReconnect = true;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'leave' }));
+      }
+    });
+  }
+
+  function cardDisplay(card) {
+    const r = card.rank === 'T' ? '10' : card.rank;
+    return `${r}${card.suit}`;
+  }
+
+  /** Card filename for SVG (e.g. 3C, 10H, QS) without extension. */
+  function cardFilename(card) {
+    const r = card.rank === 'T' ? '10' : (card.rank || '');
+    return r + (card.suit || '');
+  }
+
+  function cardFrontImg(card) {
+    const img = document.createElement('img');
+    img.src = '/elpres/cards/' + cardFilename(card) + '.svg';
+    img.alt = cardDisplay(card);
+    img.className = 'card-front-img';
+    return img;
+  }
+
+  function cardBackImg() {
+    const img = document.createElement('img');
+    img.src = '/elpres/cards/back.svg';
+    img.alt = '';
+    img.className = 'card-back-img';
+    return img;
+  }
+
+  /** Normalized key for matching server valid_plays (rank 10 as "T"). */
+  function cardKey(c) {
+    if (!c) return '';
+    const r = c.rank === '10' ? 'T' : (c.rank || '');
+    return r + ':' + (c.suit || '');
+  }
+
+  function connect() {
+    ws = new WebSocket(wsUrl);
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'state') {
+          state = msg.state;
+          playerId = msg.player_id;
+          const pilePlays = state?.round?.pile?.plays || [];
+          const myIdx = (state?.players || []).findIndex(p => p.id === playerId);
+          const isOurTurn = state?.current_player_idx === myIdx && state?.phase === 'Playing';
+          if (pilePlays.length === 0 && !isOurTurn) {
+            pendingPlay.length = 0;
+          }
+          render();
+        } else if (msg.type === 'player_joined') {
+          if (state) {
+            state.players = state.players || [];
+            const p = msg.player;
+            if (p && !state.players.some(x => x.id === p.id)) {
+              state.players.push({ id: p.id, name: p.name });
+            }
+          }
+          render();
+        } else if (msg.type === 'game_over') {
+          showScoreScreen(msg.results || []);
+        } else if (msg.type === 'error') {
+          console.error(msg.message);
+          dontReconnect = true;
+          alertMessage.dataset.redirect = '1';
+          showAlert(msg.message);
+        } else if (msg.type === 'you_left') {
+          dontReconnect = true;
+          window.location.href = '/elpres/';
+        }
+      } catch (err) {
+        console.error('Parse error', err);
+      }
+    };
+    ws.onclose = () => {
+      if (!dontReconnect) setTimeout(connect, 2000);
+    };
+  }
+
+  function showScoreScreen(results) {
+    const g = state?.phase !== 'no_game' ? state : null;
+    if (!g) return;
+    const players = g.players || [];
+    const ordered = [];
+    for (const pid of results) {
+      const p = players.find(x => x.id === pid);
+      if (p) ordered.push(p);
+    }
+    scoreList.innerHTML = ordered.map((p, i) => {
+      const pos = i + 1;
+      let acc = '';
+      if (pos === 1) acc = ' 👑';
+      if (pos === players.length) acc = ' 💩';
+      return `<li>${pos}. ${p.name}${acc}</li>`;
+    }).join('');
+    scoreOverlay.classList.remove('hidden');
+    setTimeout(() => {
+      scoreOverlay.classList.add('hidden');
+    }, 10000);
+  }
+
+  function render() {
+    if (!state) return;
+
+    if (state.phase === 'no_game') {
+      lobbyOverlay.classList.remove('hidden');
+      const raw = state.players || [];
+      const seen = new Set();
+      const players = raw.filter(p => {
+        if (seen.has(p.id)) return false;
+        seen.add(p.id);
+        return true;
+      });
+      startGameBtn.disabled = players.length < 2;
+      lobbyPlayerList.innerHTML = players.map(p =>
+        `<li class="${p.id === playerId ? 'me' : ''}">${escapeHtml(p.name)}</li>`
+      ).join('');
+      container.classList.add('hidden');
+      return;
+    }
+
+    lobbyOverlay.classList.add('hidden');
+    container.classList.remove('hidden');
+
+    const g = state;
+    const players = g.players || [];
+    const myIdx = players.findIndex(p => p.id === playerId);
+    const isMyTurn = g.current_player_idx === myIdx && g.phase === 'Playing';
+    const validPlays = g.valid_plays || [];
+
+    if (g.phase === 'Trading' && g.trading) {
+      renderTradePile(g, myIdx);
+      renderHand(g, myIdx, false, []);
+      passBtn.style.display = 'none';
+      renderPlayersStatus(g, myIdx);
+      return;
+    }
+
+    renderPile(g, isMyTurn);
+    renderHand(g, myIdx, isMyTurn, validPlays);
+    renderPassButton(g, myIdx, isMyTurn);
+    renderPlayersStatus(g, myIdx);
+  }
+
+  function renderTradePile(g, myIdx) {
+    pileEl.innerHTML = '';
+    const t = g.trading || {};
+    const faceDown = t.face_down;
+    const highCard = t.high_card;
+    const lowCard = t.low_card;
+    const epClaimed = t.ep_claimed;
+    const shClaimed = t.sh_claimed;
+    const me = myIdx >= 0 ? g.players[myIdx] : null;
+    const iAmEP = me && me.past_accolade === 'ElPresidente';
+    const iAmSH = me && me.past_accolade === 'Shithead';
+
+    const layer = document.createElement('div');
+    layer.className = 'pile-layer current trade-cards';
+
+    if (faceDown && t.trade_count) {
+      for (let i = 0; i < (t.trade_count || 2); i++) {
+        const div = document.createElement('div');
+        div.className = 'pile-card card-back';
+        div.appendChild(cardBackImg());
+        div.style.marginLeft = i === 0 ? '0' : '-31px';
+        layer.appendChild(div);
+      }
+    } else {
+      const cardsToShow = [];
+      if (highCard && !epClaimed) cardsToShow.push({ card: highCard, role: 'presidente', isMine: iAmEP });
+      if (lowCard && !shClaimed) cardsToShow.push({ card: lowCard, role: 'shithead', isMine: iAmSH });
+      cardsToShow.sort((a, b) => (a.isMine ? 1 : 0) - (b.isMine ? 1 : 0));
+      cardsToShow.forEach((entry, i) => {
+        const div = document.createElement('div');
+        div.className = 'pile-card trade-card' + (entry.isMine ? ' trade-card-take draggable' : '');
+        div.appendChild(cardFrontImg(entry.card));
+        div.style.marginLeft = i === 0 ? '0' : '-31px';
+        if (entry.isMine) {
+          div.draggable = true;
+          div.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('application/json', JSON.stringify({ role: entry.role }));
+            e.dataTransfer.effectAllowed = 'move';
+            setDragImageFromElement(e, div);
+          });
+          bindTouchDrag(div, { role: entry.role }, 'trade');
+        }
+        layer.appendChild(div);
+      });
+    }
+
+    if (layer.children.length) pileEl.appendChild(layer);
+    pileDropZone.classList.toggle('drag-over', false);
+  }
+
+  function pileCardRotation(playIdx, cardIdx, card) {
+    const h = (playIdx * 7 + cardIdx * 3 + (card.rank || '').charCodeAt(0) + (card.suit || '').charCodeAt(0)) % 51;
+    return 10 + h;
+  }
+
+  function renderPile(g, isMyTurn) {
+    pileEl.innerHTML = '';
+    const plays = g.round?.pile?.plays || [];
+    const layers = [];
+    if (plays.length > 1) {
+      const underneath = plays.slice(0, -1);
+      underneath.forEach((play, i) => {
+        layers.push({ play, cls: 'underneath', rot: (i % 2 === 0 ? -15 : 15) * (i + 1) / 2 });
+      });
+    }
+    if (plays.length > 0) {
+      layers.push({ play: plays[plays.length - 1], cls: 'current' });
+    }
+
+    layers.forEach(({ play, cls, rot }, playIdx) => {
+      const layer = document.createElement('div');
+      layer.className = `pile-layer ${cls}`;
+      if (rot) layer.style.transform = `rotate(${rot}deg)`;
+      const cards = play.cards || [];
+      cards.forEach((card, i) => {
+        const div = document.createElement('div');
+        div.className = 'pile-card';
+        div.style.setProperty('--pile-card-rot', pileCardRotation(playIdx, i, card) + 'deg');
+        div.appendChild(cardFrontImg(card));
+        div.style.marginLeft = i === 0 ? '0' : '-31px';
+        layer.appendChild(div);
+      });
+      pileEl.appendChild(layer);
+    });
+
+    if (pendingPlay.length > 0) {
+      const layer = document.createElement('div');
+      layer.className = 'pile-layer current pending-play';
+      pendingPlay.forEach((card, i) => {
+        const div = document.createElement('div');
+        div.className = 'pile-card draggable';
+        div.appendChild(cardFrontImg(card));
+        div.style.marginLeft = i === 0 ? '0' : '-31px';
+        div.dataset.rank = card.rank;
+        div.dataset.suit = card.suit;
+        div.draggable = true;
+        div.addEventListener('dragstart', (e) => {
+          e.dataTransfer.setData('application/json', JSON.stringify([card]));
+          e.dataTransfer.effectAllowed = 'move';
+          setDragImageFromElement(e, div);
+        });
+        bindTouchDrag(div, card, 'hand');
+        layer.appendChild(div);
+      });
+      pileEl.appendChild(layer);
+    }
+
+    pileDropZone.classList.toggle('drag-over', false);
+  }
+
+  function cardsPerRowForWidth(availableWidth) {
+    const cardWidth = 73;
+    const step = 44;
+    return Math.max(1, Math.floor((availableWidth - cardWidth) / step) + 1);
+  }
+
+  function renderHand(g, myIdx, isMyTurn, validPlays) {
+    handEl.innerHTML = '';
+    if (myIdx < 0) return;
+    const me = g.players[myIdx];
+    const hand = me.hand || [];
+    const validSets = new Set((validPlays || []).map(vp => vp.map(c => cardKey(c)).sort().join(',')));
+    const inPending = new Set(pendingPlay.map(c => cardKey(c)));
+
+    const toShow = [];
+    hand.forEach((card, i) => {
+      if (inPending.has(cardKey(card))) return;
+      toShow.push({ card, i });
+    });
+
+    const container = handEl.closest('#player-hand-container') || handEl.parentElement;
+    const containerWidth = container ? container.getBoundingClientRect().width : (window.innerWidth - 32);
+    const padding = 32;
+    const cardsPerRow = cardsPerRowForWidth(Math.max(0, containerWidth - padding));
+
+    let handIndex = 0;
+    for (let rowStart = 0; rowStart < toShow.length; rowStart += cardsPerRow) {
+      const rowDiv = document.createElement('div');
+      rowDiv.className = 'hand-row';
+      const rowItems = toShow.slice(rowStart, rowStart + cardsPerRow);
+      rowItems.forEach(({ card, i }) => {
+        const key = cardKey(card);
+        const div = document.createElement('div');
+        div.className = 'hand-card';
+        div.style.zIndex = handIndex;
+        div.appendChild(cardFrontImg(card));
+        div.dataset.rank = card.rank;
+        div.dataset.suit = card.suit;
+        div.dataset.index = i;
+        handIndex++;
+        const cardObj = card;
+        const isPartOfValid = Array.from(validSets).some(setStr => {
+          const parts = setStr.split(',');
+          return parts.includes(key);
+        });
+        if (isMyTurn && isPartOfValid) {
+          div.classList.add('valid-play', 'draggable');
+          div.draggable = true;
+          div.addEventListener('dragstart', (e) => onDragStart(e, cardObj));
+          bindTouchDrag(div, cardObj, 'pile');
+        }
+        rowDiv.appendChild(div);
+      });
+      handEl.appendChild(rowDiv);
+    }
+  }
+
+  function renderPassButton(g, myIdx, isMyTurn) {
+    if (myIdx < 0 || !g.players[myIdx]?.hand?.length) {
+      passBtn.style.display = 'none';
+      return;
+    }
+    passBtn.style.display = 'block';
+    if (!isMyTurn) {
+      passBtn.disabled = true;
+      passBtn.textContent = 'Waiting for Turn';
+      passBtn.classList.remove('can-end-turn');
+      return;
+    }
+    const pilePlays = g.round?.pile?.plays || [];
+    const pileEmpty = pilePlays.length === 0;
+    const mustDefinePlay = pileEmpty && isMyTurn;
+    const hasValidPending = pendingPlayMatchesValidPlay(g);
+
+    if (mustDefinePlay) {
+      passBtn.textContent = 'End My Turn';
+      passBtn.disabled = !hasValidPending;
+      passBtn.classList.toggle('can-end-turn', hasValidPending);
+    } else if (pendingPlay.length > 0 && !hasValidPending) {
+      passBtn.disabled = true;
+      passBtn.textContent = 'Pass';
+      passBtn.classList.remove('can-end-turn');
+    } else if (hasValidPending) {
+      passBtn.disabled = false;
+      passBtn.textContent = 'End My Turn';
+      passBtn.classList.add('can-end-turn');
+    } else {
+      passBtn.disabled = false;
+      passBtn.textContent = 'Pass';
+      passBtn.classList.remove('can-end-turn');
+    }
+  }
+
+  /** True if current selection matches one of the server-provided valid_plays. No game logic here. */
+  function pendingPlayMatchesValidPlay(g) {
+    const validPlays = g.valid_plays || [];
+    if (!pendingPlay.length) return false;
+    const pendingKeys = pendingPlay.map(c => cardKey(c)).sort().join(',');
+    return validPlays.some((vp) => {
+      if (!Array.isArray(vp) || vp.length !== pendingPlay.length) return false;
+      const vpKeys = vp.map(c => cardKey(c)).sort().join(',');
+      return vpKeys === pendingKeys;
+    });
+  }
+
+  function renderPlayersStatus(g, myIdx) {
+    playersEl.innerHTML = '';
+    const players = g.players || [];
+    let others = players.filter(p => p.id !== playerId);
+    const n = others.length;
+    if (n === 0) return;
+    if (n % 2 === 1) {
+      const acrossIdx = (myIdx + Math.floor(players.length / 2)) % players.length;
+      const acrossId = players[acrossIdx].id;
+      const idxInOthers = others.findIndex(p => p.id === acrossId);
+      if (idxInOthers >= 0) {
+        const mid = Math.floor(n / 2);
+        others = Array.from({ length: n }, (_, i) => others[(idxInOthers + i - mid + n) % n]);
+      }
+    }
+    // Symmetric about vertical midline: from 10 o'clock (150°) to 2 o'clock (30°)
+    const startAngle = Math.PI / 2 + Math.PI / 3;  // 150° (10 o'clock)
+    const endAngle = Math.PI / 2 - Math.PI / 3;   // 30° (2 o'clock)
+    const radius = 42;
+    // x = cos(angle), y = -sin(angle) for screen coords (y down)
+    others.forEach((p, i) => {
+      const angle = n === 1 ? Math.PI / 2 : startAngle + (endAngle - startAngle) * (i / Math.max(1, n - 1));
+      const x = 50 + radius * Math.cos(angle);
+      const y = 50 - radius * Math.sin(angle);
+      const div = document.createElement('div');
+      div.className = 'player-status';
+      div.style.left = `${x}%`;
+      div.style.top = `${y}%`;
+      let accIcon = '';
+      if (p.accolade === 'ElPresidente') accIcon = '👑';
+      if (p.accolade === 'Shithead') accIcon = '💩';
+      if (p.accolade === 'VP') accIcon = '⭐';
+      const pos = p.result_position === 1 ? ' 👑' : (p.result_position ? ` (#${p.result_position})` : '');
+      const showAccIcon = (p.result_position === 1 && accIcon === '👑') ? '' : accIcon;
+      div.innerHTML = `
+        <div class="name">${escapeHtml(p.name)}${pos} ${showAccIcon}</div>
+        <div class="cards-spread">${renderMiniCards(p.card_count || 0)}</div>
+      `;
+      playersEl.appendChild(div);
+    });
+  }
+
+  function renderMiniCards(count) {
+    const n = Math.max(0, count);
+    const cardW = 22;
+    const cardH = 30;
+    const totalAngle = 42;
+    const positions = Array(n).fill(0).map((_, i) => {
+      let leftPx = 0;
+      for (let j = 0; j < i; j++) {
+        const oj = n <= 1 ? 0.9 : 0.9 - (0.2 * j) / (n - 1);
+        leftPx += cardW * (1 - oj);
+      }
+      return leftPx;
+    });
+    const lastOverlap = n <= 1 ? 0.9 : 0.9 - (0.2 * (n - 2)) / Math.max(1, n - 1);
+    const totalWidth = n === 0 ? 0 : n === 1 ? cardW : positions[n - 1] + cardW * (1 - lastOverlap);
+    const centerIdx = n <= 1 ? 0 : Math.floor((n - 1) / 2);
+    const pivotCenter = totalWidth / 2 - cardW / 2;
+    const offset = pivotCenter - positions[centerIdx];
+    const cardsHtml = Array(n).fill(0).map((_, i) => {
+      const rot = n <= 1 ? 0 : -totalAngle / 2 + (totalAngle * i) / Math.max(1, n - 1);
+      const left = positions[i] + offset;
+      const style = [
+        `z-index: ${i}`,
+        `transform-origin: ${cardW / 2}px ${cardH}px`,
+        `transform: rotate(${rot}deg)`,
+        `left: ${left}px`
+      ].join('; ');
+      return `<div class="mini-card" style="${style}"><img src="/elpres/cards/back.svg" alt="" class="mini-card-back"></div>`;
+    }).join('');
+    return n === 0 ? '' : `<div class="cards-spread-inner" style="width: ${totalWidth}px">${cardsHtml}</div>`;
+  }
+
+  function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function setDragImageFromElement(e, el) {
+    const ghost = el.cloneNode(true);
+    ghost.classList.add('drag-ghost');
+    ghost.style.position = 'absolute';
+    ghost.style.left = '-9999px';
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
+    setTimeout(() => ghost.remove(), 0);
+  }
+
+  function onDragStart(e, card) {
+    e.dataTransfer.setData('application/json', JSON.stringify([card]));
+    e.dataTransfer.effectAllowed = 'move';
+    e.target.classList.add('dragging');
+    setDragImageFromElement(e, e.target);
+  }
+
+  /** Touch-drag polyfill: on touchend over dropTarget, perform the same action as drag-and-drop. payload is cards array for 'pile'/'hand', or { role } for 'trade'. Shows a moving ghost during drag. */
+  function bindTouchDrag(el, payload, dropTarget) {
+    const cardsArr = Array.isArray(payload) ? payload : (payload && payload.role ? null : [payload]);
+    let touchDragActive = false;
+    let startX = 0, startY = 0;
+    let ghost = null;
+
+    function updateGhost(x, y) {
+      if (!ghost) return;
+      ghost.style.left = x + 'px';
+      ghost.style.top = y + 'px';
+    }
+
+    function removeGhost() {
+      if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
+      ghost = null;
+    }
+
+    el.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      touchDragActive = false;
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    }, { passive: true });
+    el.addEventListener('touchmove', (e) => {
+      if (e.touches.length !== 1) return;
+      if (!touchDragActive) {
+        const dx = e.touches[0].clientX - startX;
+        const dy = e.touches[0].clientY - startY;
+        if (dx * dx + dy * dy > 100) {
+          touchDragActive = true;
+          el.classList.add('dragging');
+          ghost = el.cloneNode(true);
+          ghost.classList.add('drag-ghost');
+          ghost.style.left = e.touches[0].clientX + 'px';
+          ghost.style.top = e.touches[0].clientY + 'px';
+          document.body.appendChild(ghost);
+        }
+      }
+      if (touchDragActive) {
+        if (e.cancelable) e.preventDefault();
+        updateGhost(e.touches[0].clientX, e.touches[0].clientY);
+        const under = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY);
+        if (dropTarget === 'pile') {
+          pileDropZone.classList.toggle('drag-over', under && (pileContainer.contains(under) || pileEl.contains(under)));
+        } else if (dropTarget === 'hand' || dropTarget === 'trade') {
+          handContainer.classList.toggle('hand-drag-over', under && handContainer.contains(under));
+        }
+      }
+    }, { passive: false });
+    el.addEventListener('touchend', (e) => {
+      if (!touchDragActive) return;
+      el.classList.remove('dragging');
+      removeGhost();
+      pileDropZone.classList.remove('drag-over');
+      handContainer.classList.remove('hand-drag-over');
+      touchDragActive = false;
+      const t = e.changedTouches && e.changedTouches[0];
+      if (!t) return;
+      const under = document.elementFromPoint(t.clientX, t.clientY);
+      if (!under) return;
+      if (dropTarget === 'pile' && (pileContainer.contains(under) || pileEl.contains(under)) && cardsArr) {
+        addCardsToPileDrop(cardsArr);
+      }
+      if (dropTarget === 'trade' && handContainer.contains(under) && payload && (payload.role === 'presidente' || payload.role === 'shithead')) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'claim_trade', role: payload.role }));
+        }
+      }
+      if (dropTarget === 'hand' && handContainer.contains(under) && cardsArr) {
+        cardsArr.forEach(c => {
+          const idx = pendingPlay.findIndex(p => p.rank === c.rank && p.suit === c.suit);
+          if (idx >= 0) pendingPlay.splice(idx, 1);
+        });
+        render();
+      }
+    }, { passive: true });
+    el.addEventListener('touchcancel', () => {
+      el.classList.remove('dragging');
+      removeGhost();
+      touchDragActive = false;
+    }, { passive: true });
+  }
+
+  /** If pending play is valid and it's our turn, send play and clear pending (auto-end turn). Skip when pile is empty (first play of round) so user can drag multiple cards and then press End My Turn. */
+  function trySubmitPlayIfValid() {
+    if (!state || state.phase !== 'Playing') return;
+    const myIdx = (state.players || []).findIndex(p => p.id === playerId);
+    if (state.current_player_idx !== myIdx) return;
+    const pilePlays = state.round?.pile?.plays || [];
+    if (pilePlays.length === 0) return; /* first play of round: require explicit End My Turn */
+    if (!pendingPlay.length || !pendingPlayMatchesValidPlay(state)) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'play', cards: pendingPlay.slice() }));
+    pendingPlay.length = 0;
+    render();
+  }
+
+  function addCardsToPileDrop(cards) {
+    if (!Array.isArray(cards) || !cards.length) return;
+    const existingKeys = new Set(pendingPlay.map(c => cardKey(c)));
+    let added = 0;
+    for (const c of cards) {
+      if (!existingKeys.has(cardKey(c))) {
+        pendingPlay.push(c);
+        existingKeys.add(cardKey(c));
+        added++;
+      }
+    }
+    if (added) {
+      render();
+      setTimeout(function refreshPassButton() {
+        if (!state || state.phase === 'no_game') return;
+        const g = state;
+        const myIdx = (g.players || []).findIndex(p => p.id === playerId);
+        const isMyTurn = g.current_player_idx === myIdx && g.phase === 'Playing';
+        renderPassButton(g, myIdx, isMyTurn);
+      }, 0);
+      trySubmitPlayIfValid();
+    }
+  }
+
+  function handlePileDrop(e) {
+    e.preventDefault();
+    pileDropZone.classList.remove('drag-over');
+    try {
+      const data = e.dataTransfer.getData('application/json');
+      if (data) addCardsToPileDrop(JSON.parse(data));
+    } catch (_) {}
+  }
+
+  function setupDropZone() {
+    const onDragover = (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (!state || state.phase !== 'Playing') return;
+      const myIdx = (state.players || []).findIndex(p => p.id === playerId);
+      if (state.current_player_idx !== myIdx) return;
+      pileDropZone.classList.add('drag-over');
+    };
+    pileContainer.addEventListener('dragover', onDragover);
+    pileEl.addEventListener('dragover', onDragover);
+    pileContainer.addEventListener('dragleave', (e) => {
+      if (!pileContainer.contains(e.relatedTarget)) {
+        pileDropZone.classList.remove('drag-over');
+      }
+    });
+    pileContainer.addEventListener('drop', handlePileDrop);
+  }
+
+  function setupHandDropZone() {
+    handContainer.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const trading = state?.phase === 'Trading' && state?.trading;
+      if (trading) {
+        handContainer.classList.add('hand-drag-over');
+      } else if (pendingPlay.length > 0) {
+        handContainer.classList.add('hand-drag-over');
+      }
+    });
+    handContainer.addEventListener('dragleave', (e) => {
+      if (!handContainer.contains(e.relatedTarget)) {
+        handContainer.classList.remove('hand-drag-over');
+      }
+    });
+    handContainer.addEventListener('drop', (e) => {
+      e.preventDefault();
+      handContainer.classList.remove('hand-drag-over');
+      try {
+        const data = e.dataTransfer.getData('application/json');
+        if (!data) return;
+        const parsed = JSON.parse(data);
+        if (state?.phase === 'Trading' && parsed && (parsed.role === 'presidente' || parsed.role === 'shithead')) {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'claim_trade', role: parsed.role }));
+          }
+          return;
+        }
+        if (Array.isArray(parsed)) {
+          const cards = parsed;
+          cards.forEach(c => {
+            const idx = pendingPlay.findIndex(p => p.rank === c.rank && p.suit === c.suit);
+            if (idx >= 0) pendingPlay.splice(idx, 1);
+          });
+          render();
+        }
+      } catch (_) {}
+    });
+  }
+  setupHandDropZone();
+
+  document.addEventListener('dragend', () => {
+    document.querySelectorAll('.hand-card.dragging').forEach(el => el.classList.remove('dragging'));
+    handContainer.classList.remove('hand-drag-over');
+    pileDropZone.classList.remove('drag-over');
+  });
+
+  passBtn.addEventListener('click', () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const g = state?.phase !== 'no_game' ? state : null;
+    const hasValid = g ? pendingPlayMatchesValidPlay(g) : false;
+    if (hasValid && pendingPlay.length > 0) {
+      ws.send(JSON.stringify({ type: 'play', cards: pendingPlay }));
+      pendingPlay.length = 0;
+    } else {
+      ws.send(JSON.stringify({ type: 'pass' }));
+    }
+    render();
+  });
+
+  startGameBtn.addEventListener('click', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'start_game' }));
+    }
+  });
+
+  setupDropZone();
+  window.addEventListener('resize', () => { if (state) render(); });
+  connect();
+})();

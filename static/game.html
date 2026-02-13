@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>El Presidente - Game</title>
+  <link rel="stylesheet" href="/elpres/style.css">
+</head>
+<body class="game">
+  <button id="logout-btn" type="button" class="logout-btn" title="Leave game" aria-label="Leave game">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+    </button>
+  <div id="game-container">
+    <div id="card-pile-container">
+      <div id="pile-circle"></div>
+      <div id="pile-crown" aria-hidden="true"><img src="/elpres/crown.png" alt=""></div>
+      <div id="card-pile" class="card-pile"></div>
+      <div id="pile-drop-zone"></div>
+    </div>
+    <div id="players-status" class="players-circle"></div>
+    <div id="player-hand-container">
+      <div id="player-hand" class="player-hand"></div>
+      <button id="pass-btn" type="button" disabled>Pass</button>
+    </div>
+  </div>
+  <div id="score-overlay" class="hidden">
+    <div class="score-panel">
+      <h2>Round Results</h2>
+      <ol id="score-list"></ol>
+      <p>Next round starting...</p>
+    </div>
+  </div>
+  <div id="alert-overlay" class="hidden">
+    <div class="alert-panel">
+      <p id="alert-message"></p>
+      <button id="alert-ok" type="button">OK</button>
+    </div>
+  </div>
+  <div id="lobby-overlay" class="hidden">
+    <div class="lobby-panel">
+      <h1 class="lobby-title">El Presidente</h1>
+      <p class="lobby-subtitle">Waiting for players... Need at least 2 to start.</p>
+      <ul id="lobby-player-list" class="lobby-player-list"></ul>
+      <button id="start-game-btn" type="button" disabled>Start Game</button>
+    </div>
+  </div>
+  <div id="leave-confirm-overlay" class="hidden">
+    <div class="leave-confirm-panel">
+      <p>You are about to leave mid-game?</p>
+      <div class="leave-confirm-buttons">
+        <button id="leave-cancel-btn" type="button">Cancel</button>
+        <button id="leave-confirm-btn" type="button">Leave</button>
+      </div>
+    </div>
+  </div>
+  <script src="/elpres/app.js"></script>
+</body>
+</html>
