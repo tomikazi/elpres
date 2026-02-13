@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>El Presidente - Lobby</title>
+  <title>El Presidente</title>
+  <link rel="icon" type="image/png" href="/elpres/crown.png">
+  <link rel="apple-touch-icon" href="/elpres/app.png">
   <link rel="stylesheet" href="/elpres/style.css">
 </head>
 <body class="lobby">
@@ -29,9 +31,14 @@
       const LAST_NAME_KEY = 'elpres_last_name';
 
       try {
-        var lastRoom = localStorage.getItem(LAST_ROOM_KEY);
-        if (lastRoom && typeof lastRoom === 'string') {
-          roomInput.value = lastRoom;
+        var urlRoom = new URLSearchParams(window.location.search).get('room');
+        if (urlRoom && typeof urlRoom === 'string' && urlRoom.trim()) {
+          roomInput.value = urlRoom.trim();
+        } else {
+          var lastRoom = localStorage.getItem(LAST_ROOM_KEY);
+          if (lastRoom && typeof lastRoom === 'string') {
+            roomInput.value = lastRoom;
+          }
         }
         var lastName = localStorage.getItem(LAST_NAME_KEY);
         if (lastName && typeof lastName === 'string') {

@@ -66,7 +66,7 @@ def _active_player_ids(room_name: str) -> set[str]:
 def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
     """Build client-safe state (hide other players' hands). Lobby list = only currently connected players (no grace period)."""
     g = room.current_game
-    if not g:
+    if not g or len(g.players) == 0:
         active = _active_player_ids(room.name)
         if player_id:
             active = active | {player_id}  # so the requesting client sees themselves in the list
@@ -77,14 +77,16 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
             "players": [{"id": p.id, "name": p.name, "past_accolade": p.past_accolade.value} for p in lobby_players],
         }
 
-    # Find player index
+    # Find player index (normalize to str so we never miss due to type mismatch)
     player_idx = None
-    for i, p in enumerate(g.players):
-        if p.id == player_id:
-            player_idx = i
-            break
+    if player_id is not None:
+        pid_str = str(player_id)
+        for i, p in enumerate(g.players):
+            if str(p.id) == pid_str:
+                player_idx = i
+                break
 
-    # Build player views (hide hands for others); mark disconnected (in grace period) for UI
+    # Build player views: only the requesting player gets their own hand; never send other players' cards
     players_view = []
     for i, p in enumerate(g.players):
         key = (room.name, p.id)
@@ -102,6 +104,7 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
         }
         if player_idx is not None and i == player_idx:
             view["hand"] = [c.to_dict() for c in p.hand_sorted()]
+        # Do not add "hand" for other players - prevents leaking card details (anti-cheating)
         players_view.append(view)
 
     # Pile
@@ -159,6 +162,14 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
                 }
     if "waiting_for_disconnected" not in state:
         state["waiting_for_disconnected"] = None
+    # Single source of truth: is this client actively in the game or spectating?
+    actively_playing = player_idx is not None
+    # Failsafe: if we included a hand (only done for in-game player), never mark as spectator
+    if any(v.get("hand") is not None for v in state["players"]):
+        actively_playing = True
+    state["spectator"] = not actively_playing
+    if state["spectator"] and player_id:
+        state["wants_to_play"] = room.spectator_preferences.get(player_id, True)
     return state
 
 
@@ -170,8 +181,9 @@ def _get_trading_info(g: Game, player_id: str | None) -> dict | None:
     is_ep = False
     is_sh = False
     if player_id:
+        pid_str = str(player_id)
         for p in g.players:
-            if p.id == player_id:
+            if str(p.id) == pid_str:
                 is_ep = p.past_accolade == Accolade.ElPresidente
                 is_sh = p.past_accolade == Accolade.Shithead
                 break
@@ -361,6 +373,12 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                         else:
                             save_room(room)
                             await broadcast_state(room_name, room_obj=room)
+                    elif cmd == "spectator_preference":
+                        want = data.get("want_to_play")
+                        if want is True or want is False:
+                            room.spectator_preferences[player_id] = want
+                            save_room(room)
+                            await broadcast_state(room_name, room_obj=room)
                     elif cmd == "claim_trade":
                         err = await handle_claim_trade(room, player_id, data)
                         if err:
@@ -496,6 +514,9 @@ async def start_next_game_after_delay(room: GameRoom):
                 if gp.id == rp.id:
                     rp.past_accolade = gp.accolade
                     break
+        # Game players must carry forward past_accolade into the next game (engine copies it)
+        for gp in room.current_game.players:
+            gp.past_accolade = gp.accolade
 
     if len(room.players) < 2:
         room.current_game = None
@@ -504,8 +525,21 @@ async def start_next_game_after_delay(room: GameRoom):
         await broadcast_state(room.name)
         return
 
-    # Players for next game = those in room
-    room.current_game = ENGINE.start_new_game(room.players, prev_dealer, prev_ep, prev_sh)
+    # Players for next game = game players + spectators who opted "Deal me in next time"
+    game_player_ids = {p.id for p in room.current_game.players}
+    spectators_who_want_in = [
+        p for p in room.players
+        if p.id not in game_player_ids and room.spectator_preferences.get(p.id, True)
+    ]
+    players_for_next = list(room.current_game.players) + spectators_who_want_in
+    if len(players_for_next) < 2:
+        room.current_game = None
+        save_room(room)
+        logger.info("Next game skipped (not enough players after spectator filter): %s", room.name)
+        await broadcast_state(room.name)
+        return
+
+    room.current_game = ENGINE.start_new_game(players_for_next, prev_dealer, prev_ep, prev_sh)
     save_room(room)
     logger.info("Next game started: room=%s", room.name)
     await broadcast_state(room.name)
@@ -571,7 +605,7 @@ async def broadcast_state(room: str, exclude: str | None = None, room_obj: GameR
                 state = game_state_for_client(room_obj, pid)
                 await ws.send_json({"type": "state", "state": state, "player_id": pid})
         except Exception as e:
-            logger.exception("Failed to send state to %s in %s: %s", pid, room, e)
+            logger.warning("Failed to send state to %s in %s: %s", pid, room, e)
 
 
 async def delayed_remove_after_disconnect(room_name: str, player_id: str) -> None:
@@ -606,6 +640,8 @@ async def force_remove_player(room_name: str, room: GameRoom, player_id: str) ->
     if player_idx is not None:
         game_ended = ENGINE.remove_player_from_game(g, player_idx)
         if game_ended:
+            if len(g.players) == 0:
+                room.current_game = None
             save_room(room)
             await broadcast(room_name, {"type": "game_over", "results": g.results})
             asyncio.create_task(start_next_game_after_delay(room))
@@ -613,6 +649,7 @@ async def force_remove_player(room_name: str, room: GameRoom, player_id: str) ->
             save_room(room)
             await broadcast_state(room_name, room_obj=room)
     room.players = [p for p in room.players if p.id != player_id]
+    room.spectator_preferences.pop(player_id, None)
     if not room.players:
         ROOMS.pop(room_name, None)
         fresh_room = GameRoom(name=room_name)

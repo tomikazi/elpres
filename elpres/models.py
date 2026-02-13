@@ -276,19 +276,23 @@ class GameRoom:
     name: str
     current_game: Optional[Game] = None
     players: list[Player] = field(default_factory=list)  # players in room (incl spectators)
+    spectator_preferences: dict[str, bool] = field(default_factory=dict)  # player_id -> True=deal me in, False=just watch
 
     def to_dict(self) -> dict:
         return {
             "name": self.name,
             "current_game": self.current_game.to_dict() if self.current_game else None,
             "players": [p.to_dict() for p in self.players],
+            "spectator_preferences": dict(self.spectator_preferences),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "GameRoom":
         g = d.get("current_game")
+        prefs = d.get("spectator_preferences", {})
         return cls(
             name=d["name"],
             current_game=Game.from_dict(g) if g else None,
             players=[Player.from_dict(p) for p in d.get("players", [])],
+            spectator_preferences={k: bool(v) for k, v in prefs.items()} if isinstance(prefs, dict) else {},
         )
