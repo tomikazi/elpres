@@ -222,7 +222,7 @@ async def handle_room(request: web.Request) -> web.Response:
 
 async def handle_join(request: web.Request) -> web.Response:
     """Resolve player name to id for a room (from persisted players). Returns JSON { id } or error."""
-    room_name = (request.query.get("room") or "").strip()
+    room_name = (request.query.get("room") or "").strip().lower()
     player_name = (request.query.get("name") or "").strip()[:50] or "Player"
     if not room_name:
         return web.json_response({"error": "Missing room"}, status=400)
@@ -254,7 +254,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
-    room_name = (request.query.get("room") or "").strip()
+    room_name = (request.query.get("room") or "").strip().lower()
     client_id = (request.query.get("id") or "").strip()
     if not room_name:
         await ws.send_json({"type": "error", "message": "Missing room"})

@@ -30,14 +30,18 @@
       const LAST_ROOM_KEY = 'elpres_last_room';
       const LAST_NAME_KEY = 'elpres_last_name';
 
+      roomInput.addEventListener('input', function() {
+        roomInput.value = roomInput.value.toLowerCase();
+      });
+
       try {
         var urlRoom = new URLSearchParams(window.location.search).get('room');
         if (urlRoom && typeof urlRoom === 'string' && urlRoom.trim()) {
-          roomInput.value = urlRoom.trim();
+          roomInput.value = urlRoom.trim().toLowerCase();
         } else {
           var lastRoom = localStorage.getItem(LAST_ROOM_KEY);
           if (lastRoom && typeof lastRoom === 'string') {
-            roomInput.value = lastRoom;
+            roomInput.value = lastRoom.toLowerCase();
           }
         }
         var lastName = localStorage.getItem(LAST_NAME_KEY);
@@ -47,7 +51,7 @@
       } catch (_) {}
 
       function goToRoom() {
-        const room = roomInput.value.trim();
+        const room = roomInput.value.trim().toLowerCase();
         const name = nameInput.value.trim();
         if (!room || !name) return;
         const url = '/elpres/join?room=' + encodeURIComponent(room) + '&name=' + encodeURIComponent(name);

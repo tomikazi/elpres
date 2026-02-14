@@ -274,6 +274,7 @@
 
     if (g.phase === 'Trading' && g.trading) {
       pileCircle.classList.remove('pile-circle-my-turn');
+      container.classList.remove('game-container-my-turn');
       renderTradePile(g, myIdx);
       renderHand(g, myIdx, false, []);
       passBtn.style.display = 'none';
@@ -294,6 +295,7 @@
 
     renderPile(g, isMyTurn);
     pileCircle.classList.toggle('pile-circle-my-turn', isMyTurn);
+    container.classList.toggle('game-container-my-turn', isMyTurn);
     if (state.spectator === true) {
       spectatorToggleBtn.style.display = '';
       spectatorToggleBtn.classList.remove('hidden');
@@ -527,50 +529,63 @@
     });
   }
 
+  function createPlayerStatusDiv(p, players, g) {
+    const isCurrentTurn = g.phase === 'Playing' && players.findIndex(pl => pl.id === p.id) === g.current_player_idx;
+    const div = document.createElement('div');
+    div.className = 'player-status' + (p.disconnected ? ' player-disconnected' : '') + (isCurrentTurn ? ' player-status-current' : '');
+    let accIcon = '';
+    if (p.accolade === 'ElPresidente') accIcon = '👑';
+    if (p.accolade === 'Shithead') accIcon = '💩';
+    if (p.accolade === 'VP') accIcon = '⭐';
+    const pos = p.result_position === 1 ? ' 👑' : (p.result_position ? ` (#${p.result_position})` : '');
+    const showAccIcon = (p.result_position === 1 && accIcon === '👑') ? '' : accIcon;
+    const zzz = p.disconnected ? ' 😴' : '';
+    div.innerHTML = `
+      <div class="name">${escapeHtml(p.name)}${pos} ${showAccIcon}${zzz}</div>
+      <div class="cards-spread">${renderMiniCards(p.card_count || 0)}</div>
+    `;
+    return div;
+  }
+
   function renderPlayersStatus(g, myIdx) {
     playersEl.innerHTML = '';
     const players = g.players || [];
     const N = players.length;
     if (N === 0) return;
-    // Order clockwise: start with the player who follows the current player, then wrap
-    const currentIdx = typeof g.current_player_idx === 'number' ? g.current_player_idx : 0;
-    const orderedPlayers = Array.from({ length: N }, (_, i) => players[(currentIdx + 1 + i) % N]);
-    const others = orderedPlayers.filter(p => p.id !== playerId);
+    // Order clockwise from current player's perspective (static, never changes with turn)
+    const others = Array.from({ length: N - 1 }, (_, i) => players[(myIdx + 1 + i) % N]);
     const n = others.length;
     if (n === 0) return;
-    // Symmetric about vertical midline: from 10 o'clock (150°) to 2 o'clock (30°)
-    const startAngle = Math.PI / 2 + Math.PI / 3;  // 150° (10 o'clock)
-    const endAngle = Math.PI / 2 - Math.PI / 3;   // 30° (2 o'clock)
-    const radius = 42;
-    // x = cos(angle), y = -sin(angle) for screen coords (y down)
-    others.forEach((p, i) => {
-      const angle = n === 1 ? Math.PI / 2 : startAngle + (endAngle - startAngle) * (i / Math.max(1, n - 1));
-      const x = 50 + radius * Math.cos(angle);
-      const y = 50 - radius * Math.sin(angle);
-      const div = document.createElement('div');
-      const isCurrentTurn = g.phase === 'Playing' && players.findIndex(pl => pl.id === p.id) === g.current_player_idx;
-      div.className = 'player-status' + (p.disconnected ? ' player-disconnected' : '') + (isCurrentTurn ? ' player-status-current' : '');
-      div.style.left = `${x}%`;
-      div.style.top = `${y}%`;
-      let accIcon = '';
-      if (p.accolade === 'ElPresidente') accIcon = '👑';
-      if (p.accolade === 'Shithead') accIcon = '💩';
-      if (p.accolade === 'VP') accIcon = '⭐';
-      const pos = p.result_position === 1 ? ' 👑' : (p.result_position ? ` (#${p.result_position})` : '');
-      const showAccIcon = (p.result_position === 1 && accIcon === '👑') ? '' : accIcon;
-      const zzz = p.disconnected ? ' 😴' : '';
-      div.innerHTML = `
-        <div class="name">${escapeHtml(p.name)}${pos} ${showAccIcon}${zzz}</div>
-        <div class="cards-spread">${renderMiniCards(p.card_count || 0)}</div>
-      `;
-      playersEl.appendChild(div);
-    });
+
+    const leftCol = document.createElement('div');
+    leftCol.className = 'players-column players-left';
+    const topCol = document.createElement('div');
+    topCol.className = 'players-column players-top';
+    const rightCol = document.createElement('div');
+    rightCol.className = 'players-column players-right';
+
+    if (N % 2 === 1) {
+      // Odd total: even number of others. Split in half: left column (bottom-to-top), right column (top-to-bottom)
+      const half = n / 2;
+      others.slice(0, half).forEach((p) => leftCol.appendChild(createPlayerStatusDiv(p, players, g)));
+      others.slice(half).forEach((p) => rightCol.appendChild(createPlayerStatusDiv(p, players, g)));
+    } else {
+      // Even total: odd number of others. Middle one at top center; rest split left/right
+      const mid = Math.floor(n / 2);
+      others.slice(0, mid).forEach((p) => leftCol.appendChild(createPlayerStatusDiv(p, players, g)));
+      topCol.appendChild(createPlayerStatusDiv(others[mid], players, g));
+      others.slice(mid + 1).forEach((p) => rightCol.appendChild(createPlayerStatusDiv(p, players, g)));
+    }
+
+    if (leftCol.childNodes.length) playersEl.appendChild(leftCol);
+    if (topCol.childNodes.length) playersEl.appendChild(topCol);
+    if (rightCol.childNodes.length) playersEl.appendChild(rightCol);
   }
 
   function renderMiniCards(count) {
     const n = Math.max(0, count);
-    const cardW = 22;
-    const cardH = 30;
+    const cardW = 29;  // 22 * 1.3
+    const cardH = 39;  // 30 * 1.3
     const totalAngle = 42;
     const positions = Array(n).fill(0).map((_, i) => {
       let leftPx = 0;
@@ -580,14 +595,15 @@
       }
       return leftPx;
     });
-    const lastOverlap = n <= 1 ? 0.9 : 0.9 - (0.2 * (n - 2)) / Math.max(1, n - 1);
-    const totalWidth = n === 0 ? 0 : n === 1 ? cardW : positions[n - 1] + cardW * (1 - lastOverlap);
-    const centerIdx = n <= 1 ? 0 : Math.floor((n - 1) / 2);
-    const pivotCenter = totalWidth / 2 - cardW / 2;
-    const offset = pivotCenter - positions[centerIdx];
+    const spanWidth = n === 0 ? 0 : n === 1 ? cardW : positions[n - 1] + cardW;
+    const halfAngleRad = (totalAngle / 2) * Math.PI / 180;
+    const cornerExtend = n <= 1 ? 0 : cardH * Math.sin(halfAngleRad) - (cardW / 2) * (1 - Math.cos(halfAngleRad));
+    const rotationOverflow = Math.ceil(Math.max(0, cornerExtend));
+    const totalWidth = spanWidth + 2 * rotationOverflow;
+    const offset = cornerExtend - rotationOverflow;
     const cardsHtml = Array(n).fill(0).map((_, i) => {
       const rot = n <= 1 ? 0 : -totalAngle / 2 + (totalAngle * i) / Math.max(1, n - 1);
-      const left = positions[i] + offset;
+      const left = positions[i] + offset + rotationOverflow;
       const style = [
         `z-index: ${i}`,
         `transform-origin: ${cardW / 2}px ${cardH}px`,
