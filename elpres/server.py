@@ -75,6 +75,7 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
             "phase": "no_game",
             "room": room.name,
             "players": [{"id": p.id, "name": p.name, "past_accolade": p.past_accolade.value} for p in lobby_players],
+            "dick_tagged_player_id": getattr(room, "dick_tagged_player_id", None),
         }
 
     # Find player index (normalize to str so we never miss due to type mismatch)
@@ -141,10 +142,12 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
             "last_play_player_idx": g.round.last_play_player_idx,
             "pile": {"plays": pile_plays},
         },
+        "rounds_completed": g.rounds_completed,
         "results": g.results,
         "passed_this_round": list(g.passed_this_round),
         "valid_plays": valid_plays,
         "trading": _get_trading_info(g, player_id) if g.phase == GamePhase.Trading else None,
+        "dick_tagged_player_id": getattr(room, "dick_tagged_player_id", None),
     }
     # If it's a disconnected player's turn (including when they were already current and then
     # timed out), include waiting countdown so the "waiting for player" flyover shows for others.
@@ -373,10 +376,24 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                         else:
                             save_room(room)
                             await broadcast_state(room_name, room_obj=room)
+                    elif cmd == "restart_game":
+                        err = await handle_restart_game(room, player_id)
+                        if err:
+                            await ws.send_json({"type": "error", "message": err})
+                        else:
+                            save_room(room)
+                            await broadcast_state(room_name, room_obj=room)
                     elif cmd == "spectator_preference":
                         want = data.get("want_to_play")
                         if want is True or want is False:
                             room.spectator_preferences[player_id] = want
+                            save_room(room)
+                            await broadcast_state(room_name, room_obj=room)
+                    elif cmd == "tag_dick":
+                        err = await handle_tag_dick(room, player_id, data)
+                        if err:
+                            await ws.send_json({"type": "error", "message": err})
+                        else:
                             save_room(room)
                             await broadcast_state(room_name, room_obj=room)
                     elif cmd == "claim_trade":
@@ -399,6 +416,8 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
             if room and room.current_game is None:
                 # Lobby: no grace period; remove immediately so list updates for everyone
                 room.players = [p for p in room.players if p.id != player_id]
+                if getattr(room, "dick_tagged_player_id", None) == player_id:
+                    room.dick_tagged_player_id = None
                 save_room(room)
                 await broadcast_state(room_name, room_obj=room)
             else:
@@ -445,7 +464,8 @@ async def handle_play(room: GameRoom, player_id: str, data: dict) -> str | None:
         logger.info("Game stopped: room=%s, results=%s", room.name, results_names)
         await broadcast(room.name, {"type": "game_over", "results": g.results})
         # Start next game after short delay
-        asyncio.create_task(start_next_game_after_delay(room))
+        _cancel_pending_next_game(room.name)
+        PENDING_NEXT_GAME_TASKS[room.name] = asyncio.create_task(start_next_game_after_delay(room))
 
     return None
 
@@ -460,6 +480,24 @@ async def handle_pass(room: GameRoom, player_id: str) -> str | None:
         return "You are not in this game"
 
     return ENGINE.apply_pass(g, player_idx)
+
+
+async def handle_tag_dick(room: GameRoom, player_id: str, data: dict) -> str | None:
+    """Tag another player as dick. Only one at a time. Cannot tag yourself."""
+    target_id = data.get("target_player_id")
+    if not target_id:
+        return "No target player specified"
+    target_id = str(target_id)
+    if target_id == str(player_id):
+        return "Cannot tag yourself"
+    if not any(p.id == target_id for p in room.players):
+        return "Player not in room"
+    current = getattr(room, "dick_tagged_player_id", None)
+    if current == target_id:
+        room.dick_tagged_player_id = None  # toggle off
+    else:
+        room.dick_tagged_player_id = target_id
+    return None
 
 
 async def handle_claim_trade(room: GameRoom, player_id: str, data: dict) -> str | None:
@@ -494,8 +532,37 @@ async def handle_start_game(room: GameRoom, player_id: str) -> str | None:
     return None
 
 
+async def handle_restart_game(room: GameRoom, player_id: str) -> str | None:
+    """Cancel current game, clear accolades, start brand new game. Requires game in progress."""
+    if not room.current_game:
+        return "No game in progress"
+    _cancel_pending_next_game(room.name)
+    # Clear accolades for room players and game players
+    for p in room.players:
+        p.past_accolade = Accolade.Pleb
+    MAX_PLAYERS = 7
+    game_player_ids = {p.id for p in room.current_game.players}
+    spectators_who_want_in = [
+        p for p in room.players
+        if p.id not in game_player_ids and room.spectator_preferences.get(p.id, True)
+    ]
+    players = list(room.current_game.players)
+    for p in players:
+        p.past_accolade = Accolade.Pleb
+    for sp in spectators_who_want_in:
+        if len(players) >= MAX_PLAYERS:
+            break
+        players.append(sp)
+    if len(players) < 2:
+        return "Need at least 2 players to restart"
+    room.current_game = ENGINE.start_new_game(players, None, None, None)
+    logger.info("Game restarted: room=%s, players=%d", room.name, len(players))
+    return None
+
+
 async def start_next_game_after_delay(room: GameRoom):
-    await asyncio.sleep(3)  # Brief score screen
+    await asyncio.sleep(20)  # Wait for game results window to timeout (10s delay + 10s display)
+    PENDING_NEXT_GAME_TASKS.pop(room.name, None)  # We're running; no longer pending
     room = load_room(room.name)
     if not room:
         return
@@ -526,12 +593,18 @@ async def start_next_game_after_delay(room: GameRoom):
         return
 
     # Players for next game = game players + spectators who opted "Deal me in next time"
+    # Cap at 7 players; spectators beyond the limit stay waiting for the next game
+    MAX_PLAYERS = 7
     game_player_ids = {p.id for p in room.current_game.players}
     spectators_who_want_in = [
         p for p in room.players
         if p.id not in game_player_ids and room.spectator_preferences.get(p.id, True)
     ]
-    players_for_next = list(room.current_game.players) + spectators_who_want_in
+    players_for_next = list(room.current_game.players)
+    for sp in spectators_who_want_in:
+        if len(players_for_next) >= MAX_PLAYERS:
+            break
+        players_for_next.append(sp)
     if len(players_for_next) < 2:
         room.current_game = None
         save_room(room)
@@ -543,6 +616,16 @@ async def start_next_game_after_delay(room: GameRoom):
     save_room(room)
     logger.info("Next game started: room=%s", room.name)
     await broadcast_state(room.name)
+
+
+# Pending next-game task per room (cancel on restart)
+PENDING_NEXT_GAME_TASKS: dict[str, asyncio.Task] = {}
+
+
+def _cancel_pending_next_game(room_name: str) -> None:
+    task = PENDING_NEXT_GAME_TASKS.pop(room_name, None)
+    if task and not task.done():
+        task.cancel()
 
 
 # WebSocket broadcast tracking
@@ -644,12 +727,15 @@ async def force_remove_player(room_name: str, room: GameRoom, player_id: str) ->
                 room.current_game = None
             save_room(room)
             await broadcast(room_name, {"type": "game_over", "results": g.results})
-            asyncio.create_task(start_next_game_after_delay(room))
+            _cancel_pending_next_game(room_name)
+            PENDING_NEXT_GAME_TASKS[room_name] = asyncio.create_task(start_next_game_after_delay(room))
         else:
             save_room(room)
             await broadcast_state(room_name, room_obj=room)
     room.players = [p for p in room.players if p.id != player_id]
     room.spectator_preferences.pop(player_id, None)
+    if getattr(room, "dick_tagged_player_id", None) == player_id:
+        room.dick_tagged_player_id = None
     if not room.players:
         ROOMS.pop(room_name, None)
         fresh_room = GameRoom(name=room_name)

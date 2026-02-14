@@ -34,7 +34,9 @@
   const handContainer = document.getElementById('player-hand-container');
   const passBtn = document.getElementById('pass-btn');
   const playersEl = document.getElementById('players-status');
+  const myAccoladeEl = document.getElementById('my-accolade-icon');
   const scoreOverlay = document.getElementById('score-overlay');
+  const scoreCountdown = document.getElementById('score-countdown');
   const scoreList = document.getElementById('score-list');
   const lobbyOverlay = document.getElementById('lobby-overlay');
   const lobbyPlayerList = document.getElementById('lobby-player-list');
@@ -45,7 +47,12 @@
   const leaveConfirmOverlay = document.getElementById('leave-confirm-overlay');
   const leaveCancelBtn = document.getElementById('leave-cancel-btn');
   const leaveConfirmBtn = document.getElementById('leave-confirm-btn');
+  const restartConfirmOverlay = document.getElementById('restart-confirm-overlay');
+  const restartCancelBtn = document.getElementById('restart-cancel-btn');
+  const restartConfirmBtn = document.getElementById('restart-confirm-btn');
   const logoutBtn = document.getElementById('logout-btn');
+  const restartBtn = document.getElementById('restart-btn');
+  const cardsFaceToggleBtn = document.getElementById('cards-face-toggle-btn');
   const spectatorToggleBtn = document.getElementById('spectator-toggle-btn');
   const waitingDisconnectedOverlay = document.getElementById('waiting-disconnected-overlay');
   const waitingDisconnectedMessage = document.getElementById('waiting-disconnected-message');
@@ -53,6 +60,13 @@
 
   let waitingDisconnectedIntervalId = null;
   let waitingDisconnectedSeconds = 0;
+  let openingPlayTimerId = null;
+  const OPENING_PLAY_TIMEOUT_MS = 10000;
+  const CARDS_FACE_DOWN_KEY = 'elpres_cards_face_down';
+  let cardsFaceDown = false;
+  try {
+    cardsFaceDown = localStorage.getItem(CARDS_FACE_DOWN_KEY) === 'true';
+  } catch (_) {}
 
   function showAlert(message) {
     alertMessage.textContent = message;
@@ -92,6 +106,32 @@
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'leave' }));
       }
+    });
+  }
+  if (restartBtn) {
+    restartBtn.addEventListener('click', () => {
+      restartConfirmOverlay.classList.remove('hidden');
+    });
+  }
+  if (restartCancelBtn) {
+    restartCancelBtn.addEventListener('click', () => {
+      restartConfirmOverlay.classList.add('hidden');
+    });
+  }
+  if (restartConfirmBtn) {
+    restartConfirmBtn.addEventListener('click', () => {
+      restartConfirmOverlay.classList.add('hidden');
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'restart_game' }));
+      }
+    });
+  }
+  if (cardsFaceToggleBtn) {
+    cardsFaceToggleBtn.addEventListener('click', () => {
+      cardsFaceDown = !cardsFaceDown;
+      try { localStorage.setItem(CARDS_FACE_DOWN_KEY, String(cardsFaceDown)); } catch (_) {}
+      cardsFaceToggleBtn.classList.toggle('active', cardsFaceDown);
+      if (state) render();
     });
   }
 
@@ -148,6 +188,13 @@
         if (msg.type === 'state') {
           state = msg.state;
           playerId = msg.player_id;
+          const results = state?.results || [];
+          if (results.length) {
+            results.forEach((pid) => {
+              const p = (state?.players || []).find(x => String(x.id) === String(pid));
+              if (p) p.hand = [];
+            });
+          }
           const pilePlays = state?.round?.pile?.plays || [];
           const myIdx = (state?.players || []).findIndex(p => p.id === playerId);
           const isOurTurn = state?.current_player_idx === myIdx && state?.phase === 'Playing';
@@ -169,7 +216,9 @@
           }
           render();
         } else if (msg.type === 'game_over') {
-          showScoreScreen(msg.results || []);
+          applyRoundResults(msg.results || []);
+          render();
+          setTimeout(() => showScoreScreen(msg.results || []), 10000);
         } else if (msg.type === 'error') {
           console.error(msg.message);
           if (msg.message !== 'Not your turn') {
@@ -194,6 +243,22 @@
     };
   }
 
+  function applyRoundResults(results) {
+    if (!state || !state.players || !results.length) return;
+    const n = results.length;
+    results.forEach((pid, i) => {
+      const p = state.players.find(x => String(x.id) === String(pid));
+      if (p) {
+        p.result_position = i + 1;
+        p.hand = [];
+        if (i === 0) p.accolade = 'ElPresidente';
+        else if (i === n - 1) p.accolade = 'Shithead';
+        else if (i === 1) p.accolade = 'VP';
+        else p.accolade = 'Pleb';
+      }
+    });
+  }
+
   function showScoreScreen(results) {
     const g = state?.phase !== 'no_game' ? state : null;
     if (!g) return;
@@ -211,17 +276,35 @@
       return `<li>${p.name}${acc}</li>`;
     }).join('');
     scoreOverlay.classList.remove('hidden');
+    const SCORE_DISPLAY_SECONDS = 10;
+    let remaining = SCORE_DISPLAY_SECONDS;
+    scoreCountdown.textContent = String(remaining);
+    const intervalId = setInterval(() => {
+      remaining--;
+      scoreCountdown.textContent = String(remaining);
+      if (remaining <= 0) {
+        clearInterval(intervalId);
+      }
+    }, 1000);
     setTimeout(() => {
+      clearInterval(intervalId);
       scoreOverlay.classList.add('hidden');
-    }, 10000);
+    }, SCORE_DISPLAY_SECONDS * 1000);
   }
 
   function render() {
     if (!state) return;
+    if (state.phase === 'no_game') {
+      clearOpeningPlayTimer();
+      myAccoladeEl.textContent = '';
+      myAccoladeEl.classList.add('hidden');
+    }
 
     if (state.phase === 'no_game') {
       spectatorToggleBtn.style.display = 'none';
       spectatorToggleBtn.classList.add('hidden');
+      if (restartBtn) restartBtn.style.display = 'none';
+      if (cardsFaceToggleBtn) cardsFaceToggleBtn.style.display = 'none';
       lobbyOverlay.classList.remove('hidden');
       const raw = state.players || [];
       const seen = new Set();
@@ -240,12 +323,19 @@
 
     lobbyOverlay.classList.add('hidden');
     container.classList.remove('hidden');
+    if (restartBtn) restartBtn.style.display = state.spectator === true ? 'none' : '';
+    if (cardsFaceToggleBtn) {
+      cardsFaceToggleBtn.style.display = state.spectator === true ? 'none' : '';
+      cardsFaceToggleBtn.classList.toggle('active', cardsFaceDown);
+    }
 
     const g = state;
     const players = g.players || [];
     const myIdx = players.findIndex(p => String(p.id) === String(playerId));
     const isMyTurn = g.current_player_idx === myIdx && g.phase === 'Playing';
     const validPlays = g.valid_plays || [];
+    const pileEmpty = (g.round?.pile?.plays || []).length === 0;
+    if (!pileEmpty || !isMyTurn) clearOpeningPlayTimer();
 
     const w = state.waiting_for_disconnected;
     const isWaitingForMe = w && g.current_player_idx === myIdx;
@@ -273,12 +363,16 @@
     }
 
     if (g.phase === 'Trading' && g.trading) {
+      clearOpeningPlayTimer();
       pileCircle.classList.remove('pile-circle-my-turn');
       container.classList.remove('game-container-my-turn');
       renderTradePile(g, myIdx);
       renderHand(g, myIdx, false, []);
       passBtn.style.display = 'none';
       renderPlayersStatus(g, myIdx);
+      const iAmDickTagged = state?.dick_tagged_player_id != null && String(state.dick_tagged_player_id) === String(playerId);
+      myAccoladeEl.textContent = iAmDickTagged ? '🍆' : '';
+      myAccoladeEl.classList.toggle('hidden', !iAmDickTagged);
       if (state.spectator === true) {
         spectatorToggleBtn.style.display = '';
         spectatorToggleBtn.classList.remove('hidden');
@@ -311,6 +405,11 @@
     renderHand(g, myIdx, isMyTurn, validPlays);
     renderPassButton(g, myIdx, isMyTurn);
     renderPlayersStatus(g, myIdx);
+    const me = myIdx >= 0 ? g.players[myIdx] : null;
+    const hasFinished = me && (me.hand || []).length === 0 && me.result_position != null;
+    const iAmDickTagged = !hasFinished && state?.dick_tagged_player_id != null && String(state.dick_tagged_player_id) === String(playerId);
+    myAccoladeEl.textContent = iAmDickTagged ? '🍆' : '';
+    myAccoladeEl.classList.toggle('hidden', !iAmDickTagged);
   }
 
   function renderTradePile(g, myIdx) {
@@ -434,6 +533,26 @@
     if (myIdx < 0) return;
     const me = g.players[myIdx];
     const hand = me.hand || [];
+    const pos = me.result_position;
+    const nPlayers = g.players.length;
+    const hasFinished = hand.length === 0 && pos != null;
+
+    if (hasFinished) {
+      const div = document.createElement('div');
+      div.className = 'player-place-result';
+      if (pos === 1) {
+        div.innerHTML = '<div class="player-place-icon"><img src="/elpres/crown.png" alt="" width="48" height="48"></div><div class="player-place-title">El Presidente</div>';
+      } else if (pos === 2) {
+        div.innerHTML = '<div class="player-place-icon">⭐</div><div class="player-place-title">VP</div>';
+      } else if (pos === nPlayers) {
+        div.innerHTML = '<div class="player-place-icon player-place-poop">💩</div><div class="player-place-title">Shithead</div>';
+      } else {
+        div.innerHTML = '<div class="player-place-rank">#' + pos + '</div>';
+      }
+      handEl.appendChild(div);
+      return;
+    }
+
     const validSets = new Set((validPlays || []).map(vp => vp.map(c => cardKey(c)).sort().join(',')));
     const inPending = new Set(pendingPlay.map(c => cardKey(c)));
 
@@ -456,9 +575,9 @@
       rowItems.forEach(({ card, i }) => {
         const key = cardKey(card);
         const div = document.createElement('div');
-        div.className = 'hand-card';
+        div.className = 'hand-card' + (cardsFaceDown ? ' cards-face-down' : '');
         div.style.zIndex = handIndex;
-        div.appendChild(cardFrontImg(card));
+        div.appendChild(cardsFaceDown ? cardBackImg() : cardFrontImg(card));
         div.dataset.rank = card.rank;
         div.dataset.suit = card.suit;
         div.dataset.index = i;
@@ -471,8 +590,12 @@
         if (isMyTurn && isPartOfValid) {
           div.classList.add('valid-play', 'draggable');
           div.draggable = true;
-          div.addEventListener('dragstart', (e) => onDragStart(e, cardObj));
-          bindTouchDrag(div, cardObj, 'pile');
+          const pileEmpty = (g.round?.pile?.plays || []).length === 0;
+          div.addEventListener('dragstart', (e) => {
+            if (pileEmpty) startOpeningPlayTimer();
+            onDragStart(e, cardObj);
+          });
+          bindTouchDrag(div, cardObj, 'pile', pileEmpty ? startOpeningPlayTimer : null);
         }
         rowDiv.appendChild(div);
       });
@@ -499,7 +622,7 @@
     const lastPlayByMe = g.round?.last_play_player_idx === myIdx && !pileEmpty;
 
     if (mustDefinePlay) {
-      passBtn.textContent = 'End My Turn';
+      passBtn.textContent = 'Start New Round';
       passBtn.disabled = !hasValidPending;
       passBtn.classList.toggle('can-end-turn', hasValidPending);
     } else if (pendingPlay.length > 0 && !hasValidPending) {
@@ -508,7 +631,7 @@
       passBtn.classList.remove('can-end-turn');
     } else if (hasValidPending) {
       passBtn.disabled = false;
-      passBtn.textContent = 'End My Turn';
+      passBtn.textContent = 'Start New Round';
       passBtn.classList.add('can-end-turn');
     } else {
       passBtn.disabled = false;
@@ -529,21 +652,42 @@
     });
   }
 
+  function accoladeIcon(accolade) {
+    if (accolade === 'ElPresidente') return '👑';
+    if (accolade === 'Shithead') return '💩';
+    if (accolade === 'VP') return '⭐';
+    return '';
+  }
+
   function createPlayerStatusDiv(p, players, g) {
     const isCurrentTurn = g.phase === 'Playing' && players.findIndex(pl => pl.id === p.id) === g.current_player_idx;
+    const pilePlays = g.round?.pile?.plays || [];
+    const lastPlayIdx = g.round?.last_play_player_idx ?? -1;
+    const hasHighestPlay = g.phase === 'Playing' && pilePlays.length > 0 && lastPlayIdx >= 0 && players.findIndex(pl => pl.id === p.id) === lastPlayIdx;
     const div = document.createElement('div');
-    div.className = 'player-status' + (p.disconnected ? ' player-disconnected' : '') + (isCurrentTurn ? ' player-status-current' : '');
-    let accIcon = '';
-    if (p.accolade === 'ElPresidente') accIcon = '👑';
-    if (p.accolade === 'Shithead') accIcon = '💩';
-    if (p.accolade === 'VP') accIcon = '⭐';
-    const pos = p.result_position === 1 ? ' 👑' : (p.result_position ? ` (#${p.result_position})` : '');
-    const showAccIcon = (p.result_position === 1 && accIcon === '👑') ? '' : accIcon;
+    div.className = 'player-status' + (p.disconnected ? ' player-disconnected' : '') + (isCurrentTurn ? ' player-status-current' : '') + (hasHighestPlay ? ' player-status-highest-play' : '') + ' player-status-tappable';
+    const showPastAccolades = (g.rounds_completed ?? 0) === 0;
+    const pastAccIcon = showPastAccolades ? accoladeIcon(p.past_accolade) : '';
+    const pos = p.result_position === 1 ? ' 👑' : (p.result_position === 2 ? ' ⭐' : (p.result_position ? ` (#${p.result_position})` : ''));
+    const showAccIcon = (p.result_position === 1 && pastAccIcon === '👑') || (p.result_position === 2 && pastAccIcon === '⭐') ? '' : pastAccIcon;
     const zzz = p.disconnected ? ' 😴' : '';
+    const accoladePart = `${pos} ${showAccIcon}`;
+    const highestPlayDot = hasHighestPlay ? '<div class="player-status-highest-dot"></div>' : '';
     div.innerHTML = `
-      <div class="name">${escapeHtml(p.name)}${pos} ${showAccIcon}${zzz}</div>
-      <div class="cards-spread">${renderMiniCards(p.card_count || 0)}</div>
+      <div class="name">${escapeHtml(p.name)}${accoladePart}${zzz}</div>
+      <div class="cards-spread-wrapper">
+        <div class="cards-spread">${renderMiniCards(p.card_count || 0)}</div>
+        ${highestPlayDot}
+      </div>
     `;
+    div.dataset.playerId = p.id;
+    div.addEventListener('click', () => {
+      const targetId = String(p.id);
+      if (targetId === String(playerId)) return; /* cannot tag yourself */
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'tag_dick', target_player_id: targetId }));
+      }
+    });
     return div;
   }
 
@@ -552,9 +696,15 @@
     const players = g.players || [];
     const N = players.length;
     if (N === 0) return;
-    // Order clockwise from current player's perspective (static, never changes with turn)
-    const others = Array.from({ length: N - 1 }, (_, i) => players[(myIdx + 1 + i) % N]);
-    const n = others.length;
+    // Active players: N-1 others, clockwise from player to our left. Spectators: all N players.
+    let toDisplay;
+    if (myIdx < 0) {
+      const startIdx = g.current_player_idx >= 0 ? g.current_player_idx : 0;
+      toDisplay = Array.from({ length: N }, (_, i) => players[(startIdx + i) % N]);
+    } else {
+      toDisplay = Array.from({ length: N - 1 }, (_, i) => players[(myIdx + 1 + i) % N]);
+    }
+    const n = toDisplay.length;
     if (n === 0) return;
 
     const leftCol = document.createElement('div');
@@ -564,17 +714,16 @@
     const rightCol = document.createElement('div');
     rightCol.className = 'players-column players-right';
 
-    if (N % 2 === 1) {
-      // Odd total: even number of others. Split in half: left column (bottom-to-top), right column (top-to-bottom)
+    // Layout: even n => split left/right; odd n => middle at top, rest left/right (matches original N-based logic)
+    if (n % 2 === 0) {
       const half = n / 2;
-      others.slice(0, half).forEach((p) => leftCol.appendChild(createPlayerStatusDiv(p, players, g)));
-      others.slice(half).forEach((p) => rightCol.appendChild(createPlayerStatusDiv(p, players, g)));
+      toDisplay.slice(0, half).forEach((p) => leftCol.appendChild(createPlayerStatusDiv(p, players, g)));
+      toDisplay.slice(half).forEach((p) => rightCol.appendChild(createPlayerStatusDiv(p, players, g)));
     } else {
-      // Even total: odd number of others. Middle one at top center; rest split left/right
       const mid = Math.floor(n / 2);
-      others.slice(0, mid).forEach((p) => leftCol.appendChild(createPlayerStatusDiv(p, players, g)));
-      topCol.appendChild(createPlayerStatusDiv(others[mid], players, g));
-      others.slice(mid + 1).forEach((p) => rightCol.appendChild(createPlayerStatusDiv(p, players, g)));
+      toDisplay.slice(0, mid).forEach((p) => leftCol.appendChild(createPlayerStatusDiv(p, players, g)));
+      topCol.appendChild(createPlayerStatusDiv(toDisplay[mid], players, g));
+      toDisplay.slice(mid + 1).forEach((p) => rightCol.appendChild(createPlayerStatusDiv(p, players, g)));
     }
 
     if (leftCol.childNodes.length) playersEl.appendChild(leftCol);
@@ -638,8 +787,8 @@
     setDragImageFromElement(e, e.target);
   }
 
-  /** Touch-drag polyfill: on touchend over dropTarget, perform the same action as drag-and-drop. payload is cards array for 'pile'/'hand', or { role } for 'trade'. Shows a moving ghost during drag. */
-  function bindTouchDrag(el, payload, dropTarget) {
+  /** Touch-drag polyfill: on touchend over dropTarget, perform the same action as drag-and-drop. payload is cards array for 'pile'/'hand', or { role } for 'trade'. Shows a moving ghost during drag. Optional onDragStartCb when drag begins. */
+  function bindTouchDrag(el, payload, dropTarget, onDragStartCb) {
     const cardsArr = Array.isArray(payload) ? payload : (payload && payload.role ? null : [payload]);
     let touchDragActive = false;
     let startX = 0, startY = 0;
@@ -669,6 +818,7 @@
         const dy = e.touches[0].clientY - startY;
         if (dx * dx + dy * dy > 100) {
           touchDragActive = true;
+          if (typeof onDragStartCb === 'function') onDragStartCb();
           el.classList.add('dragging');
           ghost = el.cloneNode(true);
           ghost.classList.add('drag-ghost');
@@ -722,6 +872,41 @@
     }, { passive: true });
   }
 
+  function clearOpeningPlayTimer() {
+    if (openingPlayTimerId) {
+      clearTimeout(openingPlayTimerId);
+      openingPlayTimerId = null;
+    }
+  }
+
+  function startOpeningPlayTimer() {
+    if (!state || state.phase !== 'Playing') return;
+    const g = state;
+    const myIdx = (g.players || []).findIndex(p => p.id === playerId);
+    if (g.current_player_idx !== myIdx) return;
+    const pilePlays = g.round?.pile?.plays || [];
+    if (pilePlays.length !== 0) return; /* not opening play */
+    clearOpeningPlayTimer();
+    openingPlayTimerId = setTimeout(() => {
+      openingPlayTimerId = null;
+      if (!state || state.phase !== 'Playing') return;
+      const gg = state;
+      const idx = (gg.players || []).findIndex(p => p.id === playerId);
+      if (gg.current_player_idx !== idx) return;
+      const plays = gg.round?.pile?.plays || [];
+      if (plays.length !== 0) return; /* no longer opening play */
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const hasValid = pendingPlayMatchesValidPlay(gg);
+      if (hasValid && pendingPlay.length > 0) {
+        ws.send(JSON.stringify({ type: 'play', cards: pendingPlay }));
+        pendingPlay.length = 0;
+      } else {
+        ws.send(JSON.stringify({ type: 'pass' }));
+      }
+      render();
+    }, OPENING_PLAY_TIMEOUT_MS);
+  }
+
   /** If pending play is valid and it's our turn, send play and clear pending (auto-end turn). Skip when pile is empty (first play of round) unless they're playing their last card. */
   function trySubmitPlayIfValid() {
     if (!state || state.phase !== 'Playing') return;
@@ -750,6 +935,8 @@
       }
     }
     if (added) {
+      const pilePlays = state?.round?.pile?.plays || [];
+      if (pilePlays.length === 0) startOpeningPlayTimer();
       render();
       setTimeout(function refreshPassButton() {
         if (!state || state.phase === 'no_game') return;

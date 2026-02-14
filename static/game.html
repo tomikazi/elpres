@@ -9,6 +9,12 @@
   <link rel="stylesheet" href="/elpres/style.css">
 </head>
 <body class="game">
+  <button id="restart-btn" type="button" class="restart-btn" title="Restart game" aria-label="Restart game">
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+  </button>
+  <button id="cards-face-toggle-btn" type="button" class="cards-face-toggle-btn" title="Toggle cards face up/down" aria-label="Toggle cards face up/down">
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M12 22V2"/></svg>
+  </button>
   <button id="logout-btn" type="button" class="logout-btn" title="Leave game" aria-label="Leave game">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
     </button>
@@ -21,8 +27,9 @@
     </div>
     <div id="players-status" class="players-circle"></div>
     <div id="player-hand-container">
-      <div id="player-hand" class="player-hand"></div>
+      <div id="my-accolade-icon" class="my-accolade-icon" aria-hidden="true"></div>
       <button id="pass-btn" type="button" disabled>Pass</button>
+      <div id="player-hand" class="player-hand"></div>
       <button id="spectator-toggle-btn" type="button" class="spectator-toggle hidden" title="Toggle whether to be dealt in next game">Deal me in next time</button>
     </div>
   </div>
@@ -32,6 +39,7 @@
       <h2>Round Results</h2>
       <ol id="score-list"></ol>
       <p>Next round starting...</p>
+      <p id="score-countdown" class="score-countdown"></p>
     </div>
   </div>
   <div id="alert-overlay" class="hidden">
@@ -58,10 +66,19 @@
   </div>
   <div id="leave-confirm-overlay" class="hidden">
     <div class="leave-confirm-panel">
-      <p>You are about to leave mid-game?</p>
+      <p>You are about to leave mid-game!</p>
       <div class="leave-confirm-buttons">
         <button id="leave-cancel-btn" type="button">Cancel</button>
         <button id="leave-confirm-btn" type="button">Leave</button>
+      </div>
+    </div>
+  </div>
+  <div id="restart-confirm-overlay" class="hidden">
+    <div class="leave-confirm-panel restart-confirm-panel">
+      <p>You are about to restart the game!</p>
+      <div class="leave-confirm-buttons">
+        <button id="restart-cancel-btn" type="button">Cancel</button>
+        <button id="restart-confirm-btn" type="button">Restart</button>
       </div>
     </div>
   </div>
