@@ -1,6 +1,7 @@
 # El Presidente
 
 Web-based multiplayer El Presidente card game. 3–7 players, standard 52-card deck.
+The 2 player variant discards every 3rd card (except 3C of course) during the deal.
 
 ## Build
 
@@ -15,12 +16,4 @@ Web-based multiplayer El Presidente card game. 3–7 players, standard 52-card d
 ```
 
 Then open http://localhost:8765/elpres/
-
-## Docker
-
-```bash
-docker build -t elpres .
-docker run -p 8765:8765 -v elpres-data:/elpres elpres
-```
-
-Game state is stored in the `/elpres` volume. Open http://localhost:8765/elpres/
+Game state is stored in the `/elpres` volume.
