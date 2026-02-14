@@ -561,7 +561,7 @@ async def handle_restart_game(room: GameRoom, player_id: str) -> str | None:
 
 
 async def start_next_game_after_delay(room: GameRoom):
-    await asyncio.sleep(20)  # Wait for game results window to timeout (10s delay + 10s display)
+    await asyncio.sleep(13)  # Wait for game results window (3s delay + 10s display)
     PENDING_NEXT_GAME_TASKS.pop(room.name, None)  # We're running; no longer pending
     room = load_room(room.name)
     if not room:

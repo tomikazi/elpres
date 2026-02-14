@@ -218,7 +218,7 @@
         } else if (msg.type === 'game_over') {
           applyRoundResults(msg.results || []);
           render();
-          setTimeout(() => showScoreScreen(msg.results || []), 10000);
+          setTimeout(() => showScoreScreen(msg.results || []), 3000);
         } else if (msg.type === 'error') {
           console.error(msg.message);
           if (msg.message !== 'Not your turn') {
