@@ -813,6 +813,34 @@ body.game {
   background: #d4af37;
 }
 
+/* Restart vote overlay */
+#restart-vote-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+#restart-vote-overlay.hidden {
+  display: none;
+}
+
+/* Restart rejected overlay */
+#restart-rejected-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+#restart-rejected-overlay.hidden {
+  display: none;
+}
+
 /* Alert overlay */
 #alert-overlay {
   position: fixed;

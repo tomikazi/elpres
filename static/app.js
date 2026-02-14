@@ -118,11 +118,33 @@
       restartConfirmOverlay.classList.add('hidden');
     });
   }
+  const restartVoteOverlay = document.getElementById('restart-vote-overlay');
+  const restartVoteMessage = document.getElementById('restart-vote-message');
+  const restartVoteNopeBtn = document.getElementById('restart-vote-nope-btn');
+  const restartVoteYesBtn = document.getElementById('restart-vote-yes-btn');
+  const restartRejectedOverlay = document.getElementById('restart-rejected-overlay');
+
   if (restartConfirmBtn) {
     restartConfirmBtn.addEventListener('click', () => {
       restartConfirmOverlay.classList.add('hidden');
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'restart_game' }));
+        ws.send(JSON.stringify({ type: 'request_restart_vote' }));
+      }
+    });
+  }
+  if (restartVoteYesBtn) {
+    restartVoteYesBtn.addEventListener('click', () => {
+      restartVoteOverlay.classList.add('hidden');
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'restart_vote', vote: 'yes' }));
+      }
+    });
+  }
+  if (restartVoteNopeBtn) {
+    restartVoteNopeBtn.addEventListener('click', () => {
+      restartVoteOverlay.classList.add('hidden');
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'restart_vote', vote: 'no' }));
       }
     });
   }
@@ -229,6 +251,19 @@
         } else if (msg.type === 'you_left') {
           dontReconnect = true;
           window.location.href = '/elpres/';
+        } else if (msg.type === 'restart_vote_requested') {
+          const name = msg.initiator_name || 'Someone';
+          if (restartVoteMessage) restartVoteMessage.textContent = name + ' wants to restart the game';
+          if (restartVoteOverlay) restartVoteOverlay.classList.remove('hidden');
+          if (restartConfirmOverlay) restartConfirmOverlay.classList.add('hidden');
+        } else if (msg.type === 'restart_vote_rejected') {
+          if (restartVoteOverlay) restartVoteOverlay.classList.add('hidden');
+          if (restartRejectedOverlay) {
+            restartRejectedOverlay.classList.remove('hidden');
+            setTimeout(() => restartRejectedOverlay.classList.add('hidden'), 5000);
+          }
+        } else if (msg.type === 'restart_vote_passed') {
+          if (restartVoteOverlay) restartVoteOverlay.classList.add('hidden');
         }
       } catch (err) {
         console.error('Parse error', err);

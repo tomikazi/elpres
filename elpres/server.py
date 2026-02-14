@@ -4,9 +4,12 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
+
+ROOM_NAME_RE = re.compile(r"^[a-z0-9_-]+$")
 
 logger = logging.getLogger(__name__)
 
@@ -226,9 +229,17 @@ async def handle_room(request: web.Request) -> web.Response:
 async def handle_join(request: web.Request) -> web.Response:
     """Resolve player name to id for a room (from persisted players). Returns JSON { id } or error."""
     room_name = (request.query.get("room") or "").strip().lower()
-    player_name = (request.query.get("name") or "").strip()[:50] or "Player"
+    player_name = (request.query.get("name") or "").strip()
     if not room_name:
         return web.json_response({"error": "Missing room"}, status=400)
+    if not ROOM_NAME_RE.match(room_name):
+        return web.json_response({"error": "Room name may only contain letters, numbers, hyphens, and underscores"}, status=400)
+    if len(room_name) > 20:
+        return web.json_response({"error": "Room name must be 20 characters or less"}, status=400)
+    if not player_name:
+        player_name = "Player"
+    elif len(player_name) > 20:
+        return web.json_response({"error": "Name must be 20 characters or less"}, status=400)
 
     room = load_room(room_name)
     if not room:
@@ -261,6 +272,14 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     client_id = (request.query.get("id") or "").strip()
     if not room_name:
         await ws.send_json({"type": "error", "message": "Missing room"})
+        await ws.close()
+        return ws
+    if not ROOM_NAME_RE.match(room_name):
+        await ws.send_json({"type": "error", "message": "Room name may only contain letters, numbers, hyphens, and underscores"})
+        await ws.close()
+        return ws
+    if len(room_name) > 20:
+        await ws.send_json({"type": "error", "message": "Room name must be 20 characters or less"})
         await ws.close()
         return ws
     if not client_id:
@@ -376,13 +395,12 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                         else:
                             save_room(room)
                             await broadcast_state(room_name, room_obj=room)
-                    elif cmd == "restart_game":
-                        err = await handle_restart_game(room, player_id)
+                    elif cmd == "request_restart_vote":
+                        err = await handle_request_restart_vote(room, player_id)
                         if err:
                             await ws.send_json({"type": "error", "message": err})
-                        else:
-                            save_room(room)
-                            await broadcast_state(room_name, room_obj=room)
+                    elif cmd == "restart_vote":
+                        await handle_restart_vote(room, player_id, data)
                     elif cmd == "spectator_preference":
                         want = data.get("want_to_play")
                         if want is True or want is False:
@@ -532,6 +550,109 @@ async def handle_start_game(room: GameRoom, player_id: str) -> str | None:
     return None
 
 
+async def _check_restart_vote_result(room_name: str) -> None:
+    """Called after 30s. Not voting = no. 50%+ yes = restart; else reject."""
+    await asyncio.sleep(RESTART_VOTE_DURATION_SECONDS)
+    vote_state = RESTART_VOTE_STATE.pop(room_name, None)
+    if not vote_state:
+        return
+    room = load_room(room_name)
+    if not room or not room.current_game:
+        await broadcast(room_name, {"type": "restart_vote_rejected"})
+        return
+    voters = [p.id for p in room.current_game.players]
+    for pid in voters:
+        if str(pid) not in vote_state["votes"]:
+            vote_state["votes"][str(pid)] = "no"
+    await _resolve_restart_vote(room_name, room, vote_state, from_timeout=True)
+
+
+async def handle_request_restart_vote(room: GameRoom, player_id: str) -> str | None:
+    """Start a restart vote. Broadcasts to all clients."""
+    if not room.current_game:
+        return "No game in progress"
+    player_idx = next((i for i, p in enumerate(room.current_game.players) if p.id == player_id), None)
+    if player_idx is None:
+        return "You are not in this game"
+    initiator = room.current_game.players[player_idx]
+    _cancel_restart_vote(room.name)
+    task = asyncio.create_task(_check_restart_vote_result(room.name))
+    vote_state = {
+        "initiator_id": player_id,
+        "initiator_name": initiator.name,
+        "votes": {str(player_id): "yes"},
+        "task": task,
+    }
+    RESTART_VOTE_STATE[room.name] = vote_state
+    await broadcast_except(room.name, player_id, {"type": "restart_vote_requested", "initiator_name": initiator.name})
+    await _resolve_restart_vote(room.name, room, vote_state)
+    return None
+
+
+async def _resolve_restart_vote(room_name: str, room: GameRoom, vote_state: dict, from_timeout: bool = False) -> bool:
+    """Check votes and resolve if we have enough. Returns True if resolved. from_timeout=True when called after 30s (don't cancel ourselves)."""
+    voters = [p.id for p in room.current_game.players]
+    votes = vote_state.get("votes", {})
+    n_voters = len(voters)
+    n_yes = sum(1 for pid in voters if votes.get(str(pid)) == "yes")
+    n_no = sum(1 for pid in voters if votes.get(str(pid)) == "no")
+    votes_needed = n_voters if n_voters == 2 else (n_voters + 1) // 2  # 100% for 2 players, 50%+ otherwise
+    if n_yes >= votes_needed:
+        if not from_timeout:
+            vote_state["task"].cancel()
+            RESTART_VOTE_STATE.pop(room_name, None)
+        _cancel_pending_next_game(room_name)
+        for p in room.players:
+            p.past_accolade = Accolade.Pleb
+        MAX_PLAYERS = 7
+        game_player_ids = {p.id for p in room.current_game.players}
+        spectators_who_want_in = [
+            p for p in room.players
+            if p.id not in game_player_ids and room.spectator_preferences.get(p.id, True)
+        ]
+        players = list(room.current_game.players)
+        for p in players:
+            p.past_accolade = Accolade.Pleb
+        for sp in spectators_who_want_in:
+            if len(players) >= MAX_PLAYERS:
+                break
+            players.append(sp)
+        if len(players) >= 2:
+            room.current_game = ENGINE.start_new_game(players, None, None, None)
+            save_room(room)
+            await broadcast(room_name, {"type": "restart_vote_passed"})
+            await broadcast_state(room_name, room_obj=room)
+            logger.info("Game restarted via vote: room=%s", room_name)
+        else:
+            await broadcast(room_name, {"type": "restart_vote_rejected"})
+        return True
+    if n_no > n_voters - votes_needed:
+        if not from_timeout:
+            vote_state["task"].cancel()
+            RESTART_VOTE_STATE.pop(room_name, None)
+        await broadcast(room_name, {"type": "restart_vote_rejected"})
+        return True
+    return False
+
+
+async def handle_restart_vote(room: GameRoom, player_id: str, data: dict) -> str | None:
+    """Record a player's vote (yes/no). Resolve immediately when outcome is certain."""
+    vote_state = RESTART_VOTE_STATE.get(room.name)
+    if not vote_state:
+        return "No restart vote in progress"
+    if not room.current_game:
+        return None
+    player_idx = next((i for i, p in enumerate(room.current_game.players) if p.id == player_id), None)
+    if player_idx is None:
+        return None  # Spectators don't vote, ignore
+    vote = data.get("vote")
+    if vote not in ("yes", "no"):
+        return "Invalid vote"
+    vote_state["votes"][str(player_id)] = vote
+    await _resolve_restart_vote(room.name, room, vote_state)
+    return None
+
+
 async def handle_restart_game(room: GameRoom, player_id: str) -> str | None:
     """Cancel current game, clear accolades, start brand new game. Requires game in progress."""
     if not room.current_game:
@@ -618,8 +739,18 @@ async def start_next_game_after_delay(room: GameRoom):
     await broadcast_state(room.name)
 
 
+# Restart vote state per room: {room_name: {initiator_id, initiator_name, votes: {pid: "yes"|"no"}, task}}
+RESTART_VOTE_STATE: dict[str, dict] = {}
+RESTART_VOTE_DURATION_SECONDS = 30
+
 # Pending next-game task per room (cancel on restart)
 PENDING_NEXT_GAME_TASKS: dict[str, asyncio.Task] = {}
+
+
+def _cancel_restart_vote(room_name: str) -> None:
+    state = RESTART_VOTE_STATE.pop(room_name, None)
+    if state and (task := state.get("task")) and not task.done():
+        task.cancel()
 
 
 def _cancel_pending_next_game(room_name: str) -> None:

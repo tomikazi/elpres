@@ -75,11 +75,25 @@
   </div>
   <div id="restart-confirm-overlay" class="hidden">
     <div class="leave-confirm-panel restart-confirm-panel">
-      <p>You are about to restart the game!</p>
+      <p>Request vote to restart game</p>
       <div class="leave-confirm-buttons">
         <button id="restart-cancel-btn" type="button">Cancel</button>
         <button id="restart-confirm-btn" type="button">Restart</button>
       </div>
+    </div>
+  </div>
+  <div id="restart-vote-overlay" class="hidden">
+    <div class="leave-confirm-panel restart-confirm-panel">
+      <p id="restart-vote-message"></p>
+      <div class="leave-confirm-buttons">
+        <button id="restart-vote-nope-btn" type="button">Nope</button>
+        <button id="restart-vote-yes-btn" type="button">Restart</button>
+      </div>
+    </div>
+  </div>
+  <div id="restart-rejected-overlay" class="hidden">
+    <div class="leave-confirm-panel restart-confirm-panel">
+      <p>Game restart has been rejected</p>
     </div>
   </div>
   <script src="/elpres/app.js"></script>

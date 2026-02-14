@@ -15,9 +15,9 @@
     <p class="subtitle">Card game for 2–7 players</p>
     <form id="join-form">
       <label for="room">Room name</label>
-      <input type="text" id="room" name="room" placeholder="Enter room name" required autocomplete="off">
+      <input type="text" id="room" name="room" placeholder="Enter room name" required autocomplete="off" maxlength="20">
       <label for="name">Your name</label>
-      <input type="text" id="name" name="name" placeholder="Your name" required maxlength="50" value="">
+      <input type="text" id="name" name="name" placeholder="Your name" required maxlength="20" value="">
       <button type="submit" id="join-btn">Enter</button>
     </form>
   </main>
@@ -31,29 +31,43 @@
       const LAST_NAME_KEY = 'elpres_last_name';
 
       roomInput.addEventListener('input', function() {
-        roomInput.value = roomInput.value.toLowerCase();
+        roomInput.value = roomInput.value.toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 20);
       });
 
       try {
         var urlRoom = new URLSearchParams(window.location.search).get('room');
         if (urlRoom && typeof urlRoom === 'string' && urlRoom.trim()) {
-          roomInput.value = urlRoom.trim().toLowerCase();
+          roomInput.value = urlRoom.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 20);
         } else {
           var lastRoom = localStorage.getItem(LAST_ROOM_KEY);
           if (lastRoom && typeof lastRoom === 'string') {
-            roomInput.value = lastRoom.toLowerCase();
+            roomInput.value = lastRoom.toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 20);
           }
         }
         var lastName = localStorage.getItem(LAST_NAME_KEY);
         if (lastName && typeof lastName === 'string') {
-          nameInput.value = lastName;
+          nameInput.value = lastName.slice(0, 20);
         }
       } catch (_) {}
 
       function goToRoom() {
-        const room = roomInput.value.trim().toLowerCase();
-        const name = nameInput.value.trim();
-        if (!room || !name) return;
+        var rawRoom = roomInput.value.trim().toLowerCase();
+        var room = rawRoom.replace(/[^a-z0-9_-]/g, '');
+        if (room !== rawRoom) {
+          alert('Room name can only contain letters, numbers, hyphens, and underscores');
+          return;
+        }
+        if (!room) { alert('Please enter a room name'); return; }
+        if (room.length > 20) {
+          alert('Room name must be 20 characters or less');
+          return;
+        }
+        var name = nameInput.value.trim();
+        if (!name) { alert('Please enter your name'); return; }
+        if (name.length > 20) {
+          alert('Name must be 20 characters or less');
+          return;
+        }
         const url = '/elpres/join?room=' + encodeURIComponent(room) + '&name=' + encodeURIComponent(name);
         fetch(url)
           .then(function(r) { return r.json(); })
