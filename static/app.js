@@ -918,6 +918,7 @@
           const idx = pendingPlay.findIndex(p => p.rank === c.rank && p.suit === c.suit);
           if (idx >= 0) pendingPlay.splice(idx, 1);
         });
+        clearOpeningPlayTimer();
         render();
       }
     }, { passive: true });
@@ -946,6 +947,7 @@
     openingPlayTimerId = setTimeout(() => {
       openingPlayTimerId = null;
       if (!state || state.phase !== 'Playing') return;
+      if (pendingPlay.length === 0) return; /* user dragged cards back off pile */
       const gg = state;
       const idx = (gg.players || []).findIndex(p => p.id === playerId);
       if (gg.current_player_idx !== idx) return;
@@ -1068,6 +1070,7 @@
             const idx = pendingPlay.findIndex(p => p.rank === c.rank && p.suit === c.suit);
             if (idx >= 0) pendingPlay.splice(idx, 1);
           });
+          clearOpeningPlayTimer();
           render();
         }
       } catch (_) {}
