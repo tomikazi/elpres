@@ -28,6 +28,7 @@
   const container = document.getElementById('game-container');
   const pileContainer = document.getElementById('card-pile-container');
   const pileCircle = document.getElementById('pile-circle');
+  const pileCrown = document.getElementById('pile-crown');
   const pileEl = document.getElementById('card-pile');
   const pileDropZone = document.getElementById('pile-drop-zone');
   const handEl = document.getElementById('player-hand');
@@ -736,6 +737,21 @@
     const players = g.players || [];
     const N = players.length;
     if (N === 0) return;
+
+    // Active players: height scales with player count (fewer = shorter). Spectators use CSS 65%.
+    const pileTops = [28, 31, 34, 37, 41, 45]; // 2..7 players: top edge of play area (vh)
+    const pileEls = [pileCircle, pileCrown, pileEl, pileDropZone];
+    if (myIdx >= 0) {
+      const heights = [22, 28, 34, 40, 45, 50]; // 2..7 players
+      const pct = heights[Math.min(Math.max(N - 2, 0), heights.length - 1)] || 40;
+      playersEl.style.height = pct + '%';
+      const topPct = pileTops[Math.min(Math.max(N - 2, 0), pileTops.length - 1)] ?? 55;
+      const pileTop = `calc(${topPct}vh + 98px)`; // center so top edge is at topPct
+      pileEls.forEach((el) => { if (el) el.style.top = pileTop; });
+    } else {
+      playersEl.style.height = '';
+      pileEls.forEach((el) => { if (el) el.style.top = ''; });
+    }
     // Active players: N-1 others, clockwise from player to our left. Spectators: all N players.
     let toDisplay;
     if (myIdx < 0) {
@@ -748,11 +764,11 @@
     if (n === 0) return;
 
     const leftCol = document.createElement('div');
-    leftCol.className = 'players-column players-left';
+    leftCol.className = 'players-column players-left' + (n % 2 === 0 ? ' players-count-even' : '');
     const topCol = document.createElement('div');
     topCol.className = 'players-column players-top';
     const rightCol = document.createElement('div');
-    rightCol.className = 'players-column players-right';
+    rightCol.className = 'players-column players-right' + (n % 2 === 0 ? ' players-count-even' : '');
 
     // Layout: even n => split left/right; odd n => middle at top, rest left/right (matches original N-based logic)
     if (n % 2 === 0) {
