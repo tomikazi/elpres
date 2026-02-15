@@ -336,6 +336,7 @@
     }
 
     if (state.phase === 'no_game') {
+      document.body.classList.remove('spectator-view');
       spectatorToggleBtn.style.display = 'none';
       spectatorToggleBtn.classList.add('hidden');
       if (restartBtn) restartBtn.style.display = 'none';
@@ -358,6 +359,7 @@
 
     lobbyOverlay.classList.add('hidden');
     container.classList.remove('hidden');
+    document.body.classList.toggle('spectator-view', state.spectator === true);
     if (restartBtn) restartBtn.style.display = state.spectator === true ? 'none' : '';
     if (cardsFaceToggleBtn) {
       cardsFaceToggleBtn.style.display = state.spectator === true ? 'none' : '';
@@ -559,7 +561,7 @@
 
   function cardsPerRowForWidth(availableWidth) {
     const cardWidth = 73;
-    const step = 44;
+    const step = 36.5;
     return Math.max(1, Math.floor((availableWidth - cardWidth) / step) + 1);
   }
 
@@ -577,10 +579,10 @@
       div.className = 'player-place-result';
       if (pos === 1) {
         div.innerHTML = '<div class="player-place-icon"><img src="/elpres/crown.png" alt="" width="48" height="48"></div><div class="player-place-title">El Presidente</div>';
-      } else if (pos === 2) {
-        div.innerHTML = '<div class="player-place-icon">⭐</div><div class="player-place-title">VP</div>';
       } else if (pos === nPlayers) {
         div.innerHTML = '<div class="player-place-icon player-place-poop">💩</div><div class="player-place-title">Shithead</div>';
+      } else if (pos === 2) {
+        div.innerHTML = '<div class="player-place-icon">⭐</div><div class="player-place-title">VP</div>';
       } else {
         div.innerHTML = '<div class="player-place-rank">#' + pos + '</div>';
       }
@@ -701,12 +703,15 @@
     const hasHighestPlay = g.phase === 'Playing' && pilePlays.length > 0 && lastPlayIdx >= 0 && players.findIndex(pl => pl.id === p.id) === lastPlayIdx;
     const div = document.createElement('div');
     div.className = 'player-status' + (p.disconnected ? ' player-disconnected' : '') + (isCurrentTurn ? ' player-status-current' : '') + (hasHighestPlay ? ' player-status-highest-play' : '') + ' player-status-tappable';
+    const nPlayers = (players || []).length;
+    const isDickTagged = state?.dick_tagged_player_id != null && String(state.dick_tagged_player_id) === String(p.id);
     const showPastAccolades = (g.rounds_completed ?? 0) === 0;
     const pastAccIcon = showPastAccolades ? accoladeIcon(p.past_accolade) : '';
-    const pos = p.result_position === 1 ? ' 👑' : (p.result_position === 2 ? ' ⭐' : (p.result_position ? ` (#${p.result_position})` : ''));
-    const showAccIcon = (p.result_position === 1 && pastAccIcon === '👑') || (p.result_position === 2 && pastAccIcon === '⭐') ? '' : pastAccIcon;
+    const pos = p.result_position === 1 ? ' 👑' : (p.result_position === nPlayers ? ' 💩' : (p.result_position === 2 ? ' ⭐' : (p.result_position ? ` (#${p.result_position})` : '')));
+    const showAccIcon = (p.result_position === 1 && pastAccIcon === '👑') || (p.result_position === nPlayers && pastAccIcon === '💩') || (p.result_position === 2 && pastAccIcon === '⭐') ? '' : pastAccIcon;
     const zzz = p.disconnected ? ' 😴' : '';
-    const accoladePart = `${pos} ${showAccIcon}`;
+    const dickEmoji = isDickTagged ? ' 🍆' : '';
+    const accoladePart = `${pos} ${showAccIcon}${dickEmoji}`;
     const highestPlayDot = hasHighestPlay ? '<div class="player-status-highest-dot"></div>' : '';
     div.innerHTML = `
       <div class="name">${escapeHtml(p.name)}${accoladePart}${zzz}</div>
