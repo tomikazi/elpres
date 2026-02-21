@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv
+env
+*.egg-info
+.eggs
+*.egg
+build
+dist
+*.manifest
+
+# Test / lint / type-check
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+.tox
+.nox
+
+# IDE / OS
+.idea
+.vscode
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local / env (not needed in image)
+.env
+.env.*
+
+# Optional: keep context minimal (Dockerfile only copies pyproject.toml, elpres/, static/)
+run
+README.md

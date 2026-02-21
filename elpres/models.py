@@ -278,6 +278,7 @@ class GameRoom:
     players: list[Player] = field(default_factory=list)  # players in room (incl spectators)
     spectator_preferences: dict[str, bool] = field(default_factory=dict)  # player_id -> True=deal me in, False=just watch
     dick_tagged_player_id: Optional[str] = None  # player currently tagged as "dick" (one per room)
+    dick_tagged_at: Optional[float] = None  # time.time() when current holder was tagged (for 15s cooldown)
 
     def to_dict(self) -> dict:
         return {
@@ -286,6 +287,7 @@ class GameRoom:
             "players": [p.to_dict() for p in self.players],
             "spectator_preferences": dict(self.spectator_preferences),
             "dick_tagged_player_id": self.dick_tagged_player_id,
+            "dick_tagged_at": self.dick_tagged_at,
         }
 
     @classmethod
@@ -293,10 +295,12 @@ class GameRoom:
         g = d.get("current_game")
         prefs = d.get("spectator_preferences", {})
         dick_id = d.get("dick_tagged_player_id")
+        dick_at = d.get("dick_tagged_at")
         return cls(
             name=d["name"],
             current_game=Game.from_dict(g) if g else None,
             players=[Player.from_dict(p) for p in d.get("players", [])],
             spectator_preferences={k: bool(v) for k, v in prefs.items()} if isinstance(prefs, dict) else {},
             dick_tagged_player_id=str(dick_id) if dick_id else None,
+            dick_tagged_at=float(dick_at) if dick_at is not None else None,
         )

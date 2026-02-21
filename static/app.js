@@ -715,10 +715,9 @@
     const accoladePart = `${pos} ${showAccIcon}${dickEmoji}`;
     const highestPlayDot = hasHighestPlay ? '<div class="player-status-highest-dot"></div>' : '';
     div.innerHTML = `
-      <div class="name">${escapeHtml(p.name)}${accoladePart}${zzz}</div>
+      <div class="name-row">${highestPlayDot}<div class="name">${escapeHtml(p.name)}${accoladePart}${zzz}</div></div>
       <div class="cards-spread-wrapper">
         <div class="cards-spread">${renderMiniCards(p.card_count || 0)}</div>
-        ${highestPlayDot}
       </div>
     `;
     div.dataset.playerId = p.id;

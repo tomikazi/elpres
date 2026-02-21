@@ -409,11 +409,10 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                             await broadcast_state(room_name, room_obj=room)
                     elif cmd == "tag_dick":
                         err = await handle_tag_dick(room, player_id, data)
-                        if err:
-                            await ws.send_json({"type": "error", "message": err})
-                        else:
+                        if not err:
                             save_room(room)
                             await broadcast_state(room_name, room_obj=room)
+                        # On error: silently refuse (no alert)
                     elif cmd == "claim_trade":
                         err = await handle_claim_trade(room, player_id, data)
                         if err:
@@ -436,6 +435,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 room.players = [p for p in room.players if p.id != player_id]
                 if getattr(room, "dick_tagged_player_id", None) == player_id:
                     room.dick_tagged_player_id = None
+                    room.dick_tagged_at = None
                 save_room(room)
                 await broadcast_state(room_name, room_obj=room)
             else:
@@ -500,8 +500,12 @@ async def handle_pass(room: GameRoom, player_id: str) -> str | None:
     return ENGINE.apply_pass(g, player_idx)
 
 
+DICK_TAG_COOLDOWN_SECONDS = 15
+
+
 async def handle_tag_dick(room: GameRoom, player_id: str, data: dict) -> str | None:
-    """Tag another player as dick. Only one at a time. Cannot tag yourself."""
+    """Tag another player as dick. Only one at a time. Cannot tag yourself.
+    Can only be granted by the current holder (after 15s cooldown) or by anyone when no one has it."""
     target_id = data.get("target_player_id")
     if not target_id:
         return "No target player specified"
@@ -511,10 +515,30 @@ async def handle_tag_dick(room: GameRoom, player_id: str, data: dict) -> str | N
     if not any(p.id == target_id for p in room.players):
         return "Player not in room"
     current = getattr(room, "dick_tagged_player_id", None)
+    dick_tagged_at = getattr(room, "dick_tagged_at", None)
+    player_str = str(player_id)
     if current == target_id:
-        room.dick_tagged_player_id = None  # toggle off
+        # Toggle off: only holder can remove it from themselves
+        if player_str != str(current):
+            return "Only the current holder can remove the plant"
+        room.dick_tagged_player_id = None
+        room.dick_tagged_at = None
     else:
-        room.dick_tagged_player_id = target_id
+        # Grant/transfer
+        if current is None:
+            # No one has it: anyone can grant (e.g. at start of game)
+            room.dick_tagged_player_id = target_id
+            room.dick_tagged_at = time.time()
+        else:
+            # Someone has it: only holder can transfer, and only after 15 seconds
+            if player_str != str(current):
+                return "Only the current holder can pass the plant"
+            elapsed = time.time() - (dick_tagged_at or 0)
+            if elapsed < DICK_TAG_COOLDOWN_SECONDS:
+                remaining = int(DICK_TAG_COOLDOWN_SECONDS - elapsed)
+                return f"Wait {remaining}s before passing the plant"
+            room.dick_tagged_player_id = target_id
+            room.dick_tagged_at = time.time()
     return None
 
 
@@ -867,6 +891,7 @@ async def force_remove_player(room_name: str, room: GameRoom, player_id: str) ->
     room.spectator_preferences.pop(player_id, None)
     if getattr(room, "dick_tagged_player_id", None) == player_id:
         room.dick_tagged_player_id = None
+        room.dick_tagged_at = None
     if not room.players:
         ROOMS.pop(room_name, None)
         fresh_room = GameRoom(name=room_name)

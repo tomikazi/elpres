@@ -102,14 +102,14 @@ body.game {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0,0,0,0.4);
-  border: 1px solid rgba(255,255,255,0.2);
+  background: transparent;
+  border: none;
   border-radius: 8px;
   color: var(--text);
   cursor: pointer;
 }
 .restart-btn:hover {
-  background: rgba(0,0,0,0.6);
+  background: rgba(0,0,0,0.2);
   color: var(--accent);
 }
 
@@ -125,24 +125,22 @@ body.game {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0,0,0,0.4);
-  border: 1px solid rgba(255,255,255,0.2);
+  background: transparent;
+  border: none;
   border-radius: 8px;
   color: var(--text);
   cursor: pointer;
 }
 .cards-face-toggle-btn:hover {
-  background: rgba(0,0,0,0.6);
+  background: rgba(0,0,0,0.2);
   color: var(--accent);
 }
 .cards-face-toggle-btn.active {
-  background: rgba(201, 162, 39, 0.4);
-  border-color: var(--accent);
+  background: rgba(201, 162, 39, 0.25);
   color: var(--accent);
-  box-shadow: 0 0 8px rgba(201, 162, 39, 0.5);
 }
 .cards-face-toggle-btn.active:hover {
-  background: rgba(201, 162, 39, 0.5);
+  background: rgba(201, 162, 39, 0.35);
 }
 
 .logout-btn {
@@ -156,14 +154,14 @@ body.game {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0,0,0,0.4);
-  border: 1px solid rgba(255,255,255,0.2);
+  background: transparent;
+  border: none;
   border-radius: 8px;
   color: var(--text);
   cursor: pointer;
 }
 .logout-btn:hover {
-  background: rgba(0,0,0,0.6);
+  background: rgba(0,0,0,0.2);
   color: var(--accent);
 }
 
@@ -626,10 +624,17 @@ body.spectator-view #pile-drop-zone {
   cursor: pointer;
 }
 
+.player-status .name-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+
 .player-status .name {
   font-size: 1.35rem;
   white-space: nowrap;
-  margin-bottom: 0.25rem;
 }
 
 .player-status.player-disconnected {
@@ -653,15 +658,11 @@ body.spectator-view #pile-drop-zone {
 }
 
 .player-status .player-status-highest-dot {
-  position: absolute;
-  bottom: -6px;
-  left: 50%;
-  transform: translateX(-50%);
+  flex-shrink: 0;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--accent);
-  z-index: 10;
   pointer-events: none;
 }
 
