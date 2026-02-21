@@ -35,6 +35,7 @@
   const pileCrown = document.getElementById('pile-crown');
   const pileEl = document.getElementById('card-pile');
   const pileDropZone = document.getElementById('pile-drop-zone');
+  const socialEmoji = document.getElementById('social-emoji');
   const handEl = document.getElementById('player-hand');
   const handContainer = document.getElementById('player-hand-container');
   const passBtn = document.getElementById('pass-btn');
@@ -76,12 +77,14 @@
   let turnTimerPhase2Id = null;
   let turnCountdownIntervalId = null;
   let lastWasMyTurn = false;
+  let lastSocialState = false;
   const TURN_WARN_AFTER_MS = 30000;
   const TURN_AUTO_PASS_AFTER_MS = 30000;
   const INACTIVITY_NOSE_MS = 30000;
   const OPENING_PLAY_TIMEOUT_MS = 10000;
   let inactiveNoseTimeoutId = null;
   let showInactiveNoseForPlayerIdx = null;
+  let lastInactivityStateKey = null;
   const CARDS_FACE_DOWN_KEY = 'elpres_cards_face_down';
   const CARDS_RANK_LABELS_KEY = 'elpres_cards_rank_labels';
   const PASS_POSITION_ABOVE_KEY = 'elpres_pass_position_above';
@@ -94,6 +97,26 @@
     passPositionAbove = localStorage.getItem(PASS_POSITION_ABOVE_KEY) === 'true';
   } catch (_) {}
   if (handContainer) handContainer.classList.toggle('pass-above-cards', passPositionAbove);
+
+  const SOCIAL_TRANSITION_MS = 600;
+  const SOCIAL_PAUSE_MS = 2000;
+
+  function playSocialEmojiAnimation() {
+    if (!socialEmoji) return;
+    socialEmoji.classList.remove('hidden');
+    socialEmoji.classList.add('social-emoji-visible');
+    socialEmoji.classList.remove('social-emoji-large', 'social-emoji-shrink');
+    void socialEmoji.offsetWidth;
+    socialEmoji.classList.add('social-emoji-large');
+    setTimeout(() => {
+      socialEmoji.classList.remove('social-emoji-large');
+      socialEmoji.classList.add('social-emoji-shrink');
+      setTimeout(() => {
+        socialEmoji.classList.add('hidden');
+        socialEmoji.classList.remove('social-emoji-visible', 'social-emoji-shrink');
+      }, SOCIAL_TRANSITION_MS);
+    }, SOCIAL_TRANSITION_MS + SOCIAL_PAUSE_MS);
+  }
 
   function showAlert(message) {
     alertMessage.textContent = message;
@@ -287,11 +310,25 @@
         if (msg.type === 'state') {
           state = msg.state;
           playerId = msg.player_id;
-          if (inactiveNoseTimeoutId) {
-            clearTimeout(inactiveNoseTimeoutId);
-            inactiveNoseTimeoutId = null;
+          const pilePlays = state?.round?.pile?.plays || [];
+          const curIdx = state?.current_player_idx;
+          const stateKey = state?.phase + ':' + curIdx + ':' + pilePlays.length;
+          if (stateKey !== lastInactivityStateKey) {
+            lastInactivityStateKey = stateKey;
+            if (inactiveNoseTimeoutId) {
+              clearTimeout(inactiveNoseTimeoutId);
+              inactiveNoseTimeoutId = null;
+            }
+            showInactiveNoseForPlayerIdx = null;
+            if (state?.phase === 'Playing' && typeof curIdx === 'number' && curIdx >= 0) {
+              const idx = curIdx;
+              inactiveNoseTimeoutId = setTimeout(() => {
+                inactiveNoseTimeoutId = null;
+                showInactiveNoseForPlayerIdx = idx;
+                render();
+              }, INACTIVITY_NOSE_MS);
+            }
           }
-          showInactiveNoseForPlayerIdx = null;
           const results = state?.results || [];
           if (results.length) {
             results.forEach((pid) => {
@@ -299,19 +336,16 @@
               if (p) p.hand = [];
             });
           }
-          const pilePlays = state?.round?.pile?.plays || [];
           const myIdx = (state?.players || []).findIndex(p => p.id === playerId);
-          const isOurTurn = state?.current_player_idx === myIdx && state?.phase === 'Playing';
+          const isOurTurn = curIdx === myIdx && state?.phase === 'Playing';
           if (pilePlays.length === 0 && !isOurTurn) {
             pendingPlay.length = 0;
           }
-          if (state?.phase === 'Playing' && typeof state.current_player_idx === 'number' && state.current_player_idx >= 0) {
-            const idx = state.current_player_idx;
-            inactiveNoseTimeoutId = setTimeout(() => {
-              inactiveNoseTimeoutId = null;
-              showInactiveNoseForPlayerIdx = idx;
-              render();
-            }, INACTIVITY_NOSE_MS);
+          if (state?.social === true && !lastSocialState && socialEmoji) {
+            lastSocialState = true;
+            playSocialEmojiAnimation();
+          } else if (state?.social !== true) {
+            lastSocialState = false;
           }
           render();
         } else if (msg.type === 'player_disconnected') {
@@ -452,8 +486,10 @@
         inactiveNoseTimeoutId = null;
       }
       showInactiveNoseForPlayerIdx = null;
+      lastInactivityStateKey = null;
       myAccoladeEl.textContent = '';
       myAccoladeEl.classList.add('hidden');
+      myAccoladeEl.classList.remove('clickable');
     }
 
     if (state.phase === 'no_game') {
@@ -554,6 +590,7 @@
         inactiveNoseTimeoutId = null;
       }
       showInactiveNoseForPlayerIdx = null;
+      lastInactivityStateKey = null;
       pileCircle.classList.remove('pile-circle-my-turn');
       container.classList.remove('game-container-my-turn');
       renderTradePile(g, myIdx);
@@ -563,6 +600,7 @@
       const iAmDickTagged = state?.dick_tagged_player_id != null && String(state.dick_tagged_player_id) === String(playerId);
       myAccoladeEl.textContent = iAmDickTagged ? '🍆' : '';
       myAccoladeEl.classList.toggle('hidden', !iAmDickTagged);
+      myAccoladeEl.classList.toggle('clickable', iAmDickTagged);
       if (state.spectator === true) {
         spectatorToggleBtn.style.display = '';
         spectatorToggleBtn.classList.remove('hidden');
@@ -598,8 +636,10 @@
     const me = myIdx >= 0 ? g.players[myIdx] : null;
     const hasFinished = me && (me.hand || []).length === 0 && me.result_position != null;
     const iAmDickTagged = !hasFinished && state?.dick_tagged_player_id != null && String(state.dick_tagged_player_id) === String(playerId);
-    myAccoladeEl.textContent = iAmDickTagged ? '🍆' : '';
-    myAccoladeEl.classList.toggle('hidden', !iAmDickTagged);
+    const iAmTakingTooLong = showInactiveNoseForPlayerIdx !== null && myIdx === showInactiveNoseForPlayerIdx;
+    myAccoladeEl.textContent = (iAmTakingTooLong ? '👃' : '') + (iAmDickTagged ? '🍆' : '');
+    myAccoladeEl.classList.toggle('hidden', !iAmTakingTooLong && !iAmDickTagged);
+    myAccoladeEl.classList.toggle('clickable', iAmDickTagged);
     lastWasMyTurn = isMyTurn;
   }
 
@@ -894,7 +934,7 @@
 
     // Active players: height scales with player count (fewer = shorter). Spectators use CSS 65%.
     const pileTops = [28, 31, 34, 37, 41, 45]; // 2..7 players: top edge of play area (vh)
-    const pileEls = [pileCircle, pileCrown, pileEl, pileDropZone];
+    const pileEls = [pileCircle, pileCrown, pileEl, pileDropZone].concat(socialEmoji ? [socialEmoji] : []);
     if (myIdx >= 0) {
       const heights = [22, 28, 34, 40, 45, 50]; // 2..7 players
       const pct = heights[Math.min(Math.max(N - 2, 0), heights.length - 1)] || 40;
@@ -1302,6 +1342,12 @@
     if (autoPassOverlay && !autoPassOverlay.classList.contains('hidden') && e.target && autoPassOverlay.contains(e.target)) return;
     clearTurnPassTimer();
     startTurnPassTimer();
+  });
+
+  myAccoladeEl.addEventListener('click', () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!myAccoladeEl.classList.contains('clickable')) return;
+    ws.send(JSON.stringify({ type: 'tag_dick', target_player_id: playerId }));
   });
 
   passBtn.addEventListener('click', () => {

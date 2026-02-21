@@ -151,6 +151,7 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
         "valid_plays": valid_plays,
         "trading": _get_trading_info(g, player_id) if g.phase == GamePhase.Trading else None,
         "dick_tagged_player_id": getattr(room, "dick_tagged_player_id", None),
+        "social": _check_social(g) if g.phase == GamePhase.Playing else False,
     }
     # If it's a disconnected player's turn (including when they were already current and then
     # timed out), include waiting countdown so the "waiting for player" flyover shows for others.
@@ -183,6 +184,18 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
         if p.id in active and p.id not in game_player_ids
     )
     return state
+
+
+def _check_social(g: Game) -> bool:
+    """True if the 4 top-most cards on the pile are all of the same rank."""
+    all_cards = []
+    for play in g.round.pile.plays:
+        all_cards.extend(play.cards)
+    if len(all_cards) < 4:
+        return False
+    top4 = all_cards[-4:]
+    rank = top4[0].rank
+    return all(c.rank == rank for c in top4)
 
 
 def _get_trading_info(g: Game, player_id: str | None) -> dict | None:
@@ -430,7 +443,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                         if not err:
                             save_room(room)
                             await broadcast_state(room_name, room_obj=room)
-                        # On error: silently refuse (no alert)
+                        # On error: silently refuse
                     elif cmd == "claim_trade":
                         err = await handle_claim_trade(room, player_id, data)
                         if err:
@@ -523,18 +536,27 @@ DICK_TAG_COOLDOWN_SECONDS = 15
 
 async def handle_tag_dick(room: GameRoom, player_id: str, data: dict) -> str | None:
     """Tag another player as dick. Only one at a time. Cannot tag yourself.
-    Can only be granted by the current holder (after 15s cooldown) or by anyone when no one has it."""
+    Can only be granted by the current holder (after 15s cooldown) or by anyone when no one has it.
+    Current holder can click their own icon to remove it (same 15s cooldown as passing)."""
     target_id = data.get("target_player_id")
     if not target_id:
         return "No target player specified"
     target_id = str(target_id)
-    if target_id == str(player_id):
-        return "Cannot tag yourself"
-    if not any(p.id == target_id for p in room.players):
-        return "Player not in room"
     current = getattr(room, "dick_tagged_player_id", None)
     dick_tagged_at = getattr(room, "dick_tagged_at", None)
     player_str = str(player_id)
+    if target_id == player_str:
+        if current == player_str:
+            elapsed = time.time() - (dick_tagged_at or 0)
+            if elapsed < DICK_TAG_COOLDOWN_SECONDS:
+                remaining = int(DICK_TAG_COOLDOWN_SECONDS - elapsed)
+                return f"Wait {remaining}s before passing the plant"
+            room.dick_tagged_player_id = None
+            room.dick_tagged_at = None
+            return None
+        return "Cannot tag yourself"
+    if not any(p.id == target_id for p in room.players):
+        return "Player not in room"
     if current == target_id:
         # Toggle off: only holder can remove it from themselves
         if player_str != str(current):

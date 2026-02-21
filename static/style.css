@@ -390,6 +390,42 @@ body.game {
   opacity: 1;
 }
 
+/* Social (two beers) emoji - floats over discard pile when top 4 cards same rank */
+#social-emoji {
+  position: fixed;
+  top: 45vh;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.1);
+  width: 196px;
+  height: 196px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 160px;
+  line-height: 1;
+  pointer-events: none;
+  z-index: 50;
+  opacity: 0;
+  transition: transform 600ms ease, opacity 600ms ease;
+}
+#social-emoji.hidden {
+  display: none;
+}
+#social-emoji.social-emoji-visible {
+  display: flex;
+  opacity: 1;
+}
+#social-emoji.social-emoji-large {
+  transform: translate(-50%, -50%) scale(1.5);
+}
+#social-emoji.social-emoji-shrink {
+  transform: translate(-50%, -50%) scale(0.1);
+}
+
+body.spectator-view #social-emoji {
+  top: 70vh;
+}
+
 /* Current player's accolade icon - within player view, above pass button */
 .my-accolade-icon {
   font-size: 2.5rem;
@@ -400,6 +436,11 @@ body.game {
   align-items: center;
   justify-content: center;
 }
+.my-accolade-icon.clickable {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
 .my-accolade-icon.hidden {
   visibility: hidden;
   height: 0;
