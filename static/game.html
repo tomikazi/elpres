@@ -12,8 +12,14 @@
   <button id="restart-btn" type="button" class="restart-btn" title="Restart game" aria-label="Restart game">
     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
   </button>
-  <button id="cards-face-toggle-btn" type="button" class="cards-face-toggle-btn" title="Toggle cards face up/down" aria-label="Toggle cards face up/down">
+  <button id="rank-labels-toggle-btn" type="button" class="topbar-toggle-btn rank-labels-toggle-btn" title="Toggle rank labels on cards" aria-label="Toggle rank labels on cards">
+    <span class="rank-labels-btn-text">A</span>
+  </button>
+  <button id="cards-face-toggle-btn" type="button" class="topbar-toggle-btn cards-face-toggle-btn" title="Toggle cards face up/down" aria-label="Toggle cards face up/down">
     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M12 22V2"/></svg>
+  </button>
+  <button id="pass-position-toggle-btn" type="button" class="topbar-toggle-btn pass-position-toggle-btn" title="Move Pass button above cards" aria-label="Move Pass button above cards">
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5"/></svg>
   </button>
   <button id="logout-btn" type="button" class="logout-btn" title="Leave game" aria-label="Leave game">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
@@ -53,6 +59,12 @@
     <div class="waiting-disconnected-panel">
       <p id="waiting-disconnected-message" class="waiting-disconnected-message">Waiting for …</p>
       <p id="waiting-disconnected-countdown" class="waiting-disconnected-countdown">60</p>
+    </div>
+  </div>
+  <div id="auto-pass-overlay" class="hidden">
+    <div class="auto-pass-panel">
+      <p id="auto-pass-message" class="auto-pass-message">You will automatically pass in…</p>
+      <p id="auto-pass-countdown" class="auto-pass-countdown">30</p>
     </div>
   </div>
   <div id="lobby-overlay" class="hidden">

@@ -5,6 +5,7 @@
 
   const params = new URLSearchParams(window.location.search);
   const playerIdFromUrl = params.get('id') || '';
+  const playerNameFromUrl = params.get('name') || '';
   const roomMatch = path.match(/\/elpres\/room\/([^/]+)/);
   const roomName = roomMatch ? decodeURIComponent(roomMatch[1]) : '';
 
@@ -15,7 +16,10 @@
 
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsHost = window.location.host;
-  const wsUrl = `${wsProtocol}//${wsHost}/elpres/ws?room=${encodeURIComponent(roomName)}&id=${encodeURIComponent(playerIdFromUrl.trim())}`;
+  let wsUrl = `${wsProtocol}//${wsHost}/elpres/ws?room=${encodeURIComponent(roomName)}&id=${encodeURIComponent(playerIdFromUrl.trim())}`;
+  if (playerNameFromUrl.trim()) {
+    wsUrl += '&name=' + encodeURIComponent(playerNameFromUrl.trim());
+  }
 
   let state = null;
   let playerId = null;
@@ -53,21 +57,42 @@
   const restartConfirmBtn = document.getElementById('restart-confirm-btn');
   const logoutBtn = document.getElementById('logout-btn');
   const restartBtn = document.getElementById('restart-btn');
+  const rankLabelsToggleBtn = document.getElementById('rank-labels-toggle-btn');
   const cardsFaceToggleBtn = document.getElementById('cards-face-toggle-btn');
+  const passPositionToggleBtn = document.getElementById('pass-position-toggle-btn');
   const spectatorToggleBtn = document.getElementById('spectator-toggle-btn');
   const waitingDisconnectedOverlay = document.getElementById('waiting-disconnected-overlay');
   const waitingDisconnectedMessage = document.getElementById('waiting-disconnected-message');
   const waitingDisconnectedCountdown = document.getElementById('waiting-disconnected-countdown');
+  const autoPassOverlay = document.getElementById('auto-pass-overlay');
+  const autoPassMessage = document.getElementById('auto-pass-message');
+  const autoPassCountdown = document.getElementById('auto-pass-countdown');
 
   let waitingDisconnectedIntervalId = null;
   let waitingDisconnectedSeconds = 0;
   let openingPlayTimerId = null;
+  let turnTimerPhase1Id = null;
+  let turnTimerPhase2Id = null;
+  let turnCountdownIntervalId = null;
+  let lastWasMyTurn = false;
+  const TURN_WARN_AFTER_MS = 30000;
+  const TURN_AUTO_PASS_AFTER_MS = 30000;
+  const INACTIVITY_NOSE_MS = 30000;
   const OPENING_PLAY_TIMEOUT_MS = 10000;
+  let inactiveNoseTimeoutId = null;
+  let showInactiveNoseForPlayerIdx = null;
   const CARDS_FACE_DOWN_KEY = 'elpres_cards_face_down';
+  const CARDS_RANK_LABELS_KEY = 'elpres_cards_rank_labels';
+  const PASS_POSITION_ABOVE_KEY = 'elpres_pass_position_above';
   let cardsFaceDown = false;
+  let showRankLabels = false;
+  let passPositionAbove = false;
   try {
     cardsFaceDown = localStorage.getItem(CARDS_FACE_DOWN_KEY) === 'true';
+    showRankLabels = localStorage.getItem(CARDS_RANK_LABELS_KEY) === 'true';
+    passPositionAbove = localStorage.getItem(PASS_POSITION_ABOVE_KEY) === 'true';
   } catch (_) {}
+  if (handContainer) handContainer.classList.toggle('pass-above-cards', passPositionAbove);
 
   function showAlert(message) {
     alertMessage.textContent = message;
@@ -149,12 +174,28 @@
       }
     });
   }
+  if (rankLabelsToggleBtn) {
+    rankLabelsToggleBtn.addEventListener('click', () => {
+      showRankLabels = !showRankLabels;
+      try { localStorage.setItem(CARDS_RANK_LABELS_KEY, String(showRankLabels)); } catch (_) {}
+      rankLabelsToggleBtn.classList.toggle('active', showRankLabels);
+      if (state) render();
+    });
+  }
   if (cardsFaceToggleBtn) {
     cardsFaceToggleBtn.addEventListener('click', () => {
       cardsFaceDown = !cardsFaceDown;
       try { localStorage.setItem(CARDS_FACE_DOWN_KEY, String(cardsFaceDown)); } catch (_) {}
       cardsFaceToggleBtn.classList.toggle('active', cardsFaceDown);
       if (state) render();
+    });
+  }
+  if (passPositionToggleBtn) {
+    passPositionToggleBtn.addEventListener('click', () => {
+      passPositionAbove = !passPositionAbove;
+      try { localStorage.setItem(PASS_POSITION_ABOVE_KEY, String(passPositionAbove)); } catch (_) {}
+      passPositionToggleBtn.classList.toggle('active', passPositionAbove);
+      handContainer.classList.toggle('pass-above-cards', passPositionAbove);
     });
   }
 
@@ -175,6 +216,40 @@
     img.alt = cardDisplay(card);
     img.className = 'card-front-img';
     return img;
+  }
+
+  /** Display rank for overlay: 2..10, J, Q, K, A (server uses T for 10). */
+  function cardRankDisplay(card) {
+    const r = card.rank === 'T' ? '10' : (card.rank || '');
+    return r;
+  }
+
+  /** True for diamonds and hearts (red), false for clubs and spades (black). */
+  function cardSuitIsRed(card) {
+    const s = (card.suit || '').toUpperCase();
+    return s === 'D' || s === 'H';
+  }
+
+  /** Face-up card content: img only, or img + rank overlay when showRankLabels is on. */
+  function cardFrontContent(card) {
+    const img = cardFrontImg(card);
+    if (!showRankLabels) return img;
+    const wrap = document.createElement('div');
+    wrap.className = 'card-front-wrapper';
+    wrap.appendChild(img);
+    const overlay = document.createElement('div');
+    overlay.className = 'card-rank-overlay ' + (cardSuitIsRed(card) ? 'suit-red' : 'suit-black');
+    const rankDisplay = cardRankDisplay(card);
+    const topLeft = document.createElement('span');
+    topLeft.className = 'card-rank-top-left';
+    topLeft.textContent = rankDisplay;
+    const bottomRight = document.createElement('span');
+    bottomRight.className = 'card-rank-bottom-right';
+    bottomRight.textContent = rankDisplay;
+    overlay.appendChild(topLeft);
+    overlay.appendChild(bottomRight);
+    wrap.appendChild(overlay);
+    return wrap;
   }
 
   function cardBackImg() {
@@ -211,6 +286,11 @@
         if (msg.type === 'state') {
           state = msg.state;
           playerId = msg.player_id;
+          if (inactiveNoseTimeoutId) {
+            clearTimeout(inactiveNoseTimeoutId);
+            inactiveNoseTimeoutId = null;
+          }
+          showInactiveNoseForPlayerIdx = null;
           const results = state?.results || [];
           if (results.length) {
             results.forEach((pid) => {
@@ -223,6 +303,14 @@
           const isOurTurn = state?.current_player_idx === myIdx && state?.phase === 'Playing';
           if (pilePlays.length === 0 && !isOurTurn) {
             pendingPlay.length = 0;
+          }
+          if (state?.phase === 'Playing' && typeof state.current_player_idx === 'number' && state.current_player_idx >= 0) {
+            const idx = state.current_player_idx;
+            inactiveNoseTimeoutId = setTimeout(() => {
+              inactiveNoseTimeoutId = null;
+              showInactiveNoseForPlayerIdx = idx;
+              render();
+            }, INACTIVITY_NOSE_MS);
           }
           render();
         } else if (msg.type === 'player_disconnected') {
@@ -244,6 +332,30 @@
           setTimeout(() => showScoreScreen(msg.results || []), 3000);
         } else if (msg.type === 'error') {
           console.error(msg.message);
+          if (msg.message === 'Unknown player; join from lobby first' && playerNameFromUrl.trim()) {
+            dontReconnect = true;
+            const name = playerNameFromUrl.trim();
+            fetch('/elpres/join?room=' + encodeURIComponent(roomName) + '&name=' + encodeURIComponent(name))
+              .then(function(r) { return r.json(); })
+              .then(function(data) {
+                if (data.error) {
+                  showAlert(msg.message);
+                  alertMessage.dataset.redirect = '1';
+                  return;
+                }
+                if (data.id) {
+                  window.location.href = window.location.pathname + '?id=' + encodeURIComponent(data.id) + '&name=' + encodeURIComponent(name);
+                  return;
+                }
+                showAlert(msg.message);
+                alertMessage.dataset.redirect = '1';
+              })
+              .catch(function() {
+                showAlert(msg.message);
+                alertMessage.dataset.redirect = '1';
+              });
+            return;
+          }
           if (msg.message !== 'Not your turn') {
             dontReconnect = true;
             alertMessage.dataset.redirect = '1';
@@ -332,6 +444,13 @@
     if (!state) return;
     if (state.phase === 'no_game') {
       clearOpeningPlayTimer();
+      clearTurnPassTimer();
+      lastWasMyTurn = false;
+      if (inactiveNoseTimeoutId) {
+        clearTimeout(inactiveNoseTimeoutId);
+        inactiveNoseTimeoutId = null;
+      }
+      showInactiveNoseForPlayerIdx = null;
       myAccoladeEl.textContent = '';
       myAccoladeEl.classList.add('hidden');
     }
@@ -341,7 +460,9 @@
       spectatorToggleBtn.style.display = 'none';
       spectatorToggleBtn.classList.add('hidden');
       if (restartBtn) restartBtn.style.display = 'none';
+      if (rankLabelsToggleBtn) rankLabelsToggleBtn.style.display = 'none';
       if (cardsFaceToggleBtn) cardsFaceToggleBtn.style.display = 'none';
+      if (passPositionToggleBtn) passPositionToggleBtn.style.display = 'none';
       lobbyOverlay.classList.remove('hidden');
       const raw = state.players || [];
       const seen = new Set();
@@ -362,9 +483,17 @@
     container.classList.remove('hidden');
     document.body.classList.toggle('spectator-view', state.spectator === true);
     if (restartBtn) restartBtn.style.display = state.spectator === true ? 'none' : '';
+    if (rankLabelsToggleBtn) {
+      rankLabelsToggleBtn.style.display = state.spectator === true ? 'none' : '';
+      rankLabelsToggleBtn.classList.toggle('active', showRankLabels);
+    }
     if (cardsFaceToggleBtn) {
       cardsFaceToggleBtn.style.display = state.spectator === true ? 'none' : '';
       cardsFaceToggleBtn.classList.toggle('active', cardsFaceDown);
+    }
+    if (passPositionToggleBtn) {
+      passPositionToggleBtn.style.display = state.spectator === true ? 'none' : '';
+      passPositionToggleBtn.classList.toggle('active', passPositionAbove);
     }
 
     const g = state;
@@ -400,8 +529,23 @@
       }
     }
 
+    if (g.phase === 'Playing') {
+      if (!isMyTurn) {
+        clearTurnPassTimer();
+      } else if (state.spectator !== true && !lastWasMyTurn) {
+        startTurnPassTimer();
+      }
+    }
+
     if (g.phase === 'Trading' && g.trading) {
       clearOpeningPlayTimer();
+      clearTurnPassTimer();
+      lastWasMyTurn = false;
+      if (inactiveNoseTimeoutId) {
+        clearTimeout(inactiveNoseTimeoutId);
+        inactiveNoseTimeoutId = null;
+      }
+      showInactiveNoseForPlayerIdx = null;
       pileCircle.classList.remove('pile-circle-my-turn');
       container.classList.remove('game-container-my-turn');
       renderTradePile(g, myIdx);
@@ -448,6 +592,7 @@
     const iAmDickTagged = !hasFinished && state?.dick_tagged_player_id != null && String(state.dick_tagged_player_id) === String(playerId);
     myAccoladeEl.textContent = iAmDickTagged ? '🍆' : '';
     myAccoladeEl.classList.toggle('hidden', !iAmDickTagged);
+    lastWasMyTurn = isMyTurn;
   }
 
   function renderTradePile(g, myIdx) {
@@ -481,7 +626,7 @@
       cardsToShow.forEach((entry, i) => {
         const div = document.createElement('div');
         div.className = 'pile-card trade-card' + (entry.isMine ? ' trade-card-take draggable' : '');
-        div.appendChild(cardFrontImg(entry.card));
+        div.appendChild(cardFrontContent(entry.card));
         div.style.marginLeft = i === 0 ? '0' : '-31px';
         if (entry.isMine) {
           div.draggable = true;
@@ -528,7 +673,7 @@
         const div = document.createElement('div');
         div.className = 'pile-card';
         div.style.setProperty('--pile-card-rot', pileCardRotation(playIdx, i, card) + 'deg');
-        div.appendChild(cardFrontImg(card));
+        div.appendChild(cardFrontContent(card));
         div.style.marginLeft = i === 0 ? '0' : '-31px';
         layer.appendChild(div);
       });
@@ -541,7 +686,7 @@
       pendingPlay.forEach((card, i) => {
         const div = document.createElement('div');
         div.className = 'pile-card draggable';
-        div.appendChild(cardFrontImg(card));
+        div.appendChild(cardFrontContent(card));
         div.style.marginLeft = i === 0 ? '0' : '-31px';
         div.dataset.rank = card.rank;
         div.dataset.suit = card.suit;
@@ -562,7 +707,7 @@
 
   function cardsPerRowForWidth(availableWidth) {
     const cardWidth = 73;
-    const step = 36.5;
+    const step = 40.15; /* 10% less horizontal overlap: 73 - 32.85 */
     return Math.max(1, Math.floor((availableWidth - cardWidth) / step) + 1);
   }
 
@@ -615,7 +760,7 @@
         const div = document.createElement('div');
         div.className = 'hand-card' + (cardsFaceDown ? ' cards-face-down' : '');
         div.style.zIndex = handIndex;
-        div.appendChild(cardsFaceDown ? cardBackImg() : cardFrontImg(card));
+        div.appendChild(cardsFaceDown ? cardBackImg() : cardFrontContent(card));
         div.dataset.rank = card.rank;
         div.dataset.suit = card.suit;
         div.dataset.index = i;
@@ -712,10 +857,12 @@
     const showAccIcon = (p.result_position === 1 && pastAccIcon === '👑') || (p.result_position === nPlayers && pastAccIcon === '💩') || (p.result_position === 2 && pastAccIcon === '⭐') ? '' : pastAccIcon;
     const zzz = p.disconnected ? ' 😴' : '';
     const dickEmoji = isDickTagged ? ' 🍆' : '';
+    const pIdx = players.findIndex(pl => pl.id === p.id);
+    const inactiveNose = (showInactiveNoseForPlayerIdx !== null && pIdx === showInactiveNoseForPlayerIdx && isCurrentTurn) ? ' 👃' : '';
     const accoladePart = `${pos} ${showAccIcon}${dickEmoji}`;
     const highestPlayDot = hasHighestPlay ? '<div class="player-status-highest-dot"></div>' : '';
     div.innerHTML = `
-      <div class="name-row">${highestPlayDot}<div class="name">${escapeHtml(p.name)}${accoladePart}${zzz}</div></div>
+      <div class="name-row">${highestPlayDot}<div class="name">${escapeHtml(p.name)}${inactiveNose}${accoladePart}${zzz}</div></div>
       <div class="cards-spread-wrapper">
         <div class="cards-spread">${renderMiniCards(p.card_count || 0)}</div>
       </div>
@@ -935,6 +1082,51 @@
     }
   }
 
+  function clearTurnPassTimer() {
+    if (turnTimerPhase1Id) {
+      clearTimeout(turnTimerPhase1Id);
+      turnTimerPhase1Id = null;
+    }
+    if (turnTimerPhase2Id) {
+      clearTimeout(turnTimerPhase2Id);
+      turnTimerPhase2Id = null;
+    }
+    if (turnCountdownIntervalId) {
+      clearInterval(turnCountdownIntervalId);
+      turnCountdownIntervalId = null;
+    }
+    if (autoPassOverlay) autoPassOverlay.classList.add('hidden');
+  }
+
+  function startTurnPassTimer() {
+    if (turnTimerPhase1Id) return; /* already running */
+    turnTimerPhase1Id = setTimeout(() => {
+      turnTimerPhase1Id = null;
+      if (autoPassOverlay && autoPassMessage && autoPassCountdown) {
+        autoPassMessage.textContent = 'You will automatically pass in…';
+        let countdown = 30;
+        autoPassCountdown.textContent = String(countdown);
+        autoPassOverlay.classList.remove('hidden');
+        turnCountdownIntervalId = setInterval(() => {
+          countdown--;
+          autoPassCountdown.textContent = String(Math.max(0, countdown));
+          if (countdown <= 0 && turnCountdownIntervalId) {
+            clearInterval(turnCountdownIntervalId);
+            turnCountdownIntervalId = null;
+          }
+        }, 1000);
+      }
+      turnTimerPhase2Id = setTimeout(() => {
+        turnTimerPhase2Id = null;
+        clearTurnPassTimer();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'pass' }));
+        }
+        if (state) render();
+      }, TURN_AUTO_PASS_AFTER_MS);
+    }, TURN_WARN_AFTER_MS);
+  }
+
   function startOpeningPlayTimer() {
     if (!state || state.phase !== 'Playing') return;
     const g = state;
@@ -953,6 +1145,7 @@
       const plays = gg.round?.pile?.plays || [];
       if (plays.length !== 0) return; /* no longer opening play */
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      clearTurnPassTimer();
       const hasValid = pendingPlayMatchesValidPlay(gg);
       if (hasValid && pendingPlay.length > 0) {
         ws.send(JSON.stringify({ type: 'play', cards: pendingPlay }));
@@ -975,6 +1168,7 @@
     const myHand = (state.players && state.players[myIdx] && state.players[myIdx].hand) ? state.players[myIdx].hand : [];
     const isPlayingLastCard = pendingPlay.length === myHand.length;
     if (pilePlays.length === 0 && !isPlayingLastCard) return; /* first play of round: require explicit End My Turn unless playing last card */
+    clearTurnPassTimer();
     ws.send(JSON.stringify({ type: 'play', cards: pendingPlay.slice() }));
     pendingPlay.length = 0;
     render();
@@ -1083,8 +1277,28 @@
     pileDropZone.classList.remove('drag-over');
   });
 
+  if (autoPassOverlay) {
+    autoPassOverlay.addEventListener('pointerdown', () => {
+      if (!autoPassOverlay.classList.contains('hidden')) {
+        clearTurnPassTimer();
+        startTurnPassTimer(); /* restart the 30s cycle */
+      }
+    });
+  }
+
+  document.addEventListener('pointerdown', (e) => {
+    if (!state || state.phase !== 'Playing' || state.spectator === true) return;
+    const myIdx = (state.players || []).findIndex(p => String(p.id) === String(playerId));
+    if (myIdx < 0 || state.current_player_idx !== myIdx) return;
+    if (passBtn && e.target && passBtn.contains(e.target)) return;
+    if (autoPassOverlay && !autoPassOverlay.classList.contains('hidden') && e.target && autoPassOverlay.contains(e.target)) return;
+    clearTurnPassTimer();
+    startTurnPassTimer();
+  });
+
   passBtn.addEventListener('click', () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    clearTurnPassTimer();
     const g = state?.phase !== 'no_game' ? state : null;
     const hasValid = g ? pendingPlayMatchesValidPlay(g) : false;
     if (hasValid && pendingPlay.length > 0) {

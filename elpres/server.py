@@ -270,6 +270,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
 
     room_name = (request.query.get("room") or "").strip().lower()
     client_id = (request.query.get("id") or "").strip()
+    client_name = (request.query.get("name") or "").strip()
     if not room_name:
         await ws.send_json({"type": "error", "message": "Missing room"})
         await ws.close()
@@ -312,14 +313,25 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
         pid == existing.id and not w.closed
         for pid, w in WS_CLIENTS.get(room_name, {}).items()
     )
+    is_reconnect = False
     if has_connection:
-        await ws.send_json({"type": "error", "message": "Id already in use"})
-        await ws.close()
-        return ws
+        # Same id + name rejoining: replace the old connection with this one
+        if client_name and client_name == existing.name:
+            old_ws = WS_CLIENTS.get(room_name, {}).get(client_id)
+            if old_ws and not old_ws.closed:
+                unregister_ws(room_name, client_id)
+                try:
+                    await old_ws.close()
+                except Exception:
+                    pass
+                is_reconnect = True
+        if not is_reconnect:
+            await ws.send_json({"type": "error", "message": "Id already in use"})
+            await ws.close()
+            return ws
 
     player_id = existing.id
     name_trimmed = existing.name
-    is_reconnect = False
     logger.info("Player connected: %s (%s)", room_name, name_trimmed)
 
     # Key must match game_state_for_client and heartbeat loop: (room.name, player_id)

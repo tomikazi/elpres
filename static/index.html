@@ -82,7 +82,7 @@
               localStorage.setItem(LAST_ROOM_KEY, room);
               localStorage.setItem(LAST_NAME_KEY, name);
             } catch (_) {}
-            window.location.href = '/elpres/room/' + encodeURIComponent(room) + '?id=' + encodeURIComponent(id);
+            window.location.href = '/elpres/room/' + encodeURIComponent(room) + '?id=' + encodeURIComponent(id) + '&name=' + encodeURIComponent(name);
           })
           .catch(function() { alert('Could not join room'); });
       }
