@@ -57,6 +57,7 @@
   const restartConfirmBtn = document.getElementById('restart-confirm-btn');
   const logoutBtn = document.getElementById('logout-btn');
   const restartBtn = document.getElementById('restart-btn');
+  const spectatorCountLabel = document.getElementById('spectator-count-label');
   const rankLabelsToggleBtn = document.getElementById('rank-labels-toggle-btn');
   const cardsFaceToggleBtn = document.getElementById('cards-face-toggle-btn');
   const passPositionToggleBtn = document.getElementById('pass-position-toggle-btn');
@@ -460,6 +461,8 @@
       spectatorToggleBtn.style.display = 'none';
       spectatorToggleBtn.classList.add('hidden');
       if (restartBtn) restartBtn.style.display = 'none';
+      const spectatorCountText = document.querySelector('#spectator-count-label .spectator-count-text');
+      if (spectatorCountText) spectatorCountText.textContent = '';
       if (rankLabelsToggleBtn) rankLabelsToggleBtn.style.display = 'none';
       if (cardsFaceToggleBtn) cardsFaceToggleBtn.style.display = 'none';
       if (passPositionToggleBtn) passPositionToggleBtn.style.display = 'none';
@@ -483,6 +486,11 @@
     container.classList.remove('hidden');
     document.body.classList.toggle('spectator-view', state.spectator === true);
     if (restartBtn) restartBtn.style.display = state.spectator === true ? 'none' : '';
+    if (spectatorCountLabel) {
+      const textEl = spectatorCountLabel.querySelector('.spectator-count-text');
+      const n = typeof state.spectator_count === 'number' ? state.spectator_count : 0;
+      if (textEl) textEl.textContent = n > 0 ? String(n) : '';
+    }
     if (rankLabelsToggleBtn) {
       rankLabelsToggleBtn.style.display = state.spectator === true ? 'none' : '';
       rankLabelsToggleBtn.classList.toggle('active', showRankLabels);
@@ -559,7 +567,7 @@
         spectatorToggleBtn.style.display = '';
         spectatorToggleBtn.classList.remove('hidden');
         const wantsToPlay = state.wants_to_play !== false;
-        spectatorToggleBtn.textContent = wantsToPlay ? 'Deal me in next time' : 'Nah, I just like to watch';
+        spectatorToggleBtn.textContent = wantsToPlay ? 'You will join next game' : "You won't join next game";
         spectatorToggleBtn.classList.toggle('subdued', !wantsToPlay);
       } else {
         spectatorToggleBtn.style.display = 'none';
@@ -576,7 +584,7 @@
       spectatorToggleBtn.style.display = '';
       spectatorToggleBtn.classList.remove('hidden');
       const wantsToPlay = state.wants_to_play !== false;
-      spectatorToggleBtn.textContent = wantsToPlay ? 'Deal me in next time' : 'Nah, I just like to watch';
+      spectatorToggleBtn.textContent = wantsToPlay ? 'You will join next game' : "You won't join next game";
       spectatorToggleBtn.classList.toggle('subdued', !wantsToPlay);
       passBtn.style.display = 'none';
     } else {

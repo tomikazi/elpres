@@ -176,6 +176,12 @@ def game_state_for_client(room: GameRoom, player_id: str | None) -> dict:
     state["spectator"] = not actively_playing
     if state["spectator"] and player_id:
         state["wants_to_play"] = room.spectator_preferences.get(player_id, True)
+    game_player_ids = {p.id for p in g.players}
+    active = _active_player_ids(room.name)
+    state["spectator_count"] = sum(
+        1 for p in room.players
+        if p.id in active and p.id not in game_player_ids
+    )
     return state
 
 
@@ -749,7 +755,7 @@ async def start_next_game_after_delay(room: GameRoom):
         await broadcast_state(room.name)
         return
 
-    # Players for next game = game players + spectators who opted "Deal me in next time"
+    # Players for next game = game players + spectators who opted "You will join next game"
     # Cap at 7 players; spectators beyond the limit stay waiting for the next game
     MAX_PLAYERS = 7
     game_player_ids = {p.id for p in room.current_game.players}
