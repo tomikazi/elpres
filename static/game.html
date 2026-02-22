@@ -25,9 +25,15 @@
   <button id="pass-position-toggle-btn" type="button" class="topbar-toggle-btn pass-position-toggle-btn" title="Move Pass button above cards" aria-label="Move Pass button above cards">
     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5"/></svg>
   </button>
-  <button id="logout-btn" type="button" class="logout-btn" title="Leave game" aria-label="Leave game">
+  <div class="topbar-right">
+    <input id="text-reaction-input" type="text" class="text-reaction-input hidden" maxlength="32" placeholder="Quick message" autocomplete="off" aria-label="Text reaction">
+    <button id="text-reaction-btn" type="button" class="topbar-flat-btn text-reaction-btn" title="Send text reaction" aria-label="Send text reaction">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </button>
+    <button id="logout-btn" type="button" class="logout-btn" title="Leave game" aria-label="Leave game">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
     </button>
+  </div>
   <div id="game-container">
     <div id="card-pile-container">
       <div id="pile-circle"></div>
@@ -40,7 +46,12 @@
     <div id="player-hand-container">
       <div id="my-accolade-icon" class="my-accolade-icon" aria-hidden="true"></div>
       <div id="player-hand" class="player-hand"></div>
-      <button id="pass-btn" type="button" disabled>Pass</button>
+      <div id="pass-row" class="pass-row">
+        <button id="reaction-laugh-btn" type="button" class="reaction-btn" title="Laugh" aria-label="Laugh">😂</button>
+        <button id="pass-btn" type="button" disabled>Pass</button>
+        <button id="reaction-angry-btn" type="button" class="reaction-btn" title="Angry" aria-label="Angry">😠</button>
+      </div>
+      <div id="reaction-flyup" class="reaction-flyup hidden" aria-hidden="true"></div>
       <button id="spectator-toggle-btn" type="button" class="spectator-toggle hidden" title="Toggle whether to join next game">You will join next game</button>
     </div>
   </div>

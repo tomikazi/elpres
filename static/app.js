@@ -39,6 +39,9 @@
   const handEl = document.getElementById('player-hand');
   const handContainer = document.getElementById('player-hand-container');
   const passBtn = document.getElementById('pass-btn');
+  const reactionLaughBtn = document.getElementById('reaction-laugh-btn');
+  const reactionAngryBtn = document.getElementById('reaction-angry-btn');
+  const reactionFlyup = document.getElementById('reaction-flyup');
   const playersEl = document.getElementById('players-status');
   const myAccoladeEl = document.getElementById('my-accolade-icon');
   const scoreOverlay = document.getElementById('score-overlay');
@@ -63,6 +66,8 @@
   const cardsFaceToggleBtn = document.getElementById('cards-face-toggle-btn');
   const passPositionToggleBtn = document.getElementById('pass-position-toggle-btn');
   const spectatorToggleBtn = document.getElementById('spectator-toggle-btn');
+  const textReactionInput = document.getElementById('text-reaction-input');
+  const textReactionBtn = document.getElementById('text-reaction-btn');
   const waitingDisconnectedOverlay = document.getElementById('waiting-disconnected-overlay');
   const waitingDisconnectedMessage = document.getElementById('waiting-disconnected-message');
   const waitingDisconnectedCountdown = document.getElementById('waiting-disconnected-countdown');
@@ -78,6 +83,10 @@
   let turnCountdownIntervalId = null;
   let lastWasMyTurn = false;
   let lastSocialState = false;
+  let reactionsPending = [];
+  let textReactionsPending = [];
+  let pileClearingPlays = null;
+  let pileClearingTimeoutId = null;
   const TURN_WARN_AFTER_MS = 30000;
   const TURN_AUTO_PASS_AFTER_MS = 30000;
   const INACTIVITY_NOSE_MS = 30000;
@@ -88,6 +97,8 @@
   const CARDS_FACE_DOWN_KEY = 'elpres_cards_face_down';
   const CARDS_RANK_LABELS_KEY = 'elpres_cards_rank_labels';
   const PASS_POSITION_ABOVE_KEY = 'elpres_pass_position_above';
+  const TEXT_REACTION_KEY = 'elpres_text_reaction';
+  let textReactionBlurSendId = null;
   let cardsFaceDown = false;
   let showRankLabels = false;
   let passPositionAbove = false;
@@ -100,6 +111,11 @@
 
   const SOCIAL_TRANSITION_MS = 600;
   const SOCIAL_PAUSE_MS = 2000;
+  const REACTION_HAPPY_EMOJIS = ['😂', '😉', '😆', '🙏', '😁'];
+  const REACTION_ANGRY_EMOJIS = ['😠', '😤', '😡', '🤬', '🤯'];
+  const REACTION_LONG_PRESS_MS = 400;
+
+  let reactionLongPressTimer = null;
 
   function playSocialEmojiAnimation() {
     if (!socialEmoji) return;
@@ -133,6 +149,78 @@
       window.location.href = '/elpres/';
     }
   });
+
+  function showTextReactionInput() {
+    if (!textReactionInput || !textReactionBtn) return;
+    textReactionInput.classList.remove('hidden');
+    try {
+      textReactionInput.value = (localStorage.getItem(TEXT_REACTION_KEY) || '').slice(0, 32);
+    } catch (_) {
+      textReactionInput.value = '';
+    }
+    textReactionInput.focus();
+    if (textReactionInput.value) textReactionInput.select();
+  }
+  function hideTextReactionInput() {
+    if (textReactionBlurSendId) {
+      clearTimeout(textReactionBlurSendId);
+      textReactionBlurSendId = null;
+    }
+    if (textReactionInput) {
+      textReactionInput.classList.add('hidden');
+      textReactionInput.value = '';
+    }
+  }
+  function sendTextReaction() {
+    const txt = (textReactionInput?.value || '').trim().slice(0, 32);
+    if (txt && ws && ws.readyState === WebSocket.OPEN) {
+      try { localStorage.setItem(TEXT_REACTION_KEY, txt); } catch (_) {}
+      ws.send(JSON.stringify({ type: 'text_reaction', text: txt }));
+      hideTextReactionInput();
+    }
+  }
+  if (textReactionBtn) {
+    textReactionBtn.addEventListener('click', (e) => {
+      if (textReactionInput.classList.contains('hidden')) {
+        showTextReactionInput();
+      } else {
+        hideTextReactionInput();
+      }
+      e.stopPropagation();
+    });
+  }
+  if (textReactionInput) {
+    textReactionInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendTextReaction();
+      } else if (e.key === 'Escape') {
+        hideTextReactionInput();
+      }
+    });
+    textReactionInput.addEventListener('blur', () => {
+      const txt = (textReactionInput.value || '').trim().slice(0, 32);
+      if (!txt || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (textReactionBlurSendId) clearTimeout(textReactionBlurSendId);
+      textReactionBlurSendId = setTimeout(() => {
+        textReactionBlurSendId = null;
+        sendTextReaction();
+      }, 150);
+    });
+    textReactionInput.addEventListener('click', (e) => e.stopPropagation());
+  }
+  document.addEventListener('click', (e) => {
+    if (textReactionInput && !textReactionInput.classList.contains('hidden') &&
+        !textReactionInput.contains(e.target) && !textReactionBtn?.contains(e.target)) {
+      hideTextReactionInput();
+    }
+  });
+  document.addEventListener('touchstart', (e) => {
+    if (textReactionInput && !textReactionInput.classList.contains('hidden') &&
+        !textReactionInput.contains(e.target) && !textReactionBtn?.contains(e.target)) {
+      hideTextReactionInput();
+    }
+  }, { passive: true });
 
   if (logoutBtn) {
     logoutBtn.addEventListener('click', () => {
@@ -308,8 +396,25 @@
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === 'state') {
+          const prevPilePlays = state?.round?.pile?.plays || [];
           state = msg.state;
           playerId = msg.player_id;
+          const newPilePlays = state?.round?.pile?.plays || [];
+          if (prevPilePlays.length > 0 && newPilePlays.length === 0 && state?.phase === 'Playing') {
+            if (pileClearingTimeoutId) clearTimeout(pileClearingTimeoutId);
+            pileClearingPlays = prevPilePlays;
+            pileClearingTimeoutId = setTimeout(() => {
+              pileClearingTimeoutId = null;
+              pileClearingPlays = null;
+              render();
+            }, 600);
+          } else {
+            pileClearingPlays = null;
+            if (pileClearingTimeoutId) {
+              clearTimeout(pileClearingTimeoutId);
+              pileClearingTimeoutId = null;
+            }
+          }
           const pilePlays = state?.round?.pile?.plays || [];
           const curIdx = state?.current_player_idx;
           const stateKey = state?.phase + ':' + curIdx + ':' + pilePlays.length;
@@ -412,6 +517,24 @@
           }
         } else if (msg.type === 'restart_vote_passed') {
           if (restartVoteOverlay) restartVoteOverlay.classList.add('hidden');
+        } else if (msg.type === 'reaction') {
+          const pid = msg.player_id;
+          const emoji = msg.emoji;
+          const inGame = (state?.players || []).some(p => String(p.id) === String(pid));
+          if (pid && emoji && inGame) {
+            reactionsPending = reactionsPending.filter(r => r.playerId !== pid);
+            reactionsPending.push({ playerId: String(pid), emoji: emoji });
+            render();
+          }
+        } else if (msg.type === 'text_reaction') {
+          const pid = msg.player_id;
+          const text = msg.text;
+          const inGame = (state?.players || []).some(p => String(p.id) === String(pid));
+          if (pid && text && inGame) {
+            textReactionsPending = textReactionsPending.filter(r => r.playerId !== pid);
+            textReactionsPending.push({ playerId: String(pid), text: String(text).slice(0, 32) });
+            render();
+          }
         }
       } catch (err) {
         console.error('Parse error', err);
@@ -459,7 +582,7 @@
       return `<li>${p.name}${acc}</li>`;
     }).join('');
     scoreOverlay.classList.remove('hidden');
-    const SCORE_DISPLAY_SECONDS = 10;
+    const SCORE_DISPLAY_SECONDS = 30;
     let remaining = SCORE_DISPLAY_SECONDS;
     scoreCountdown.textContent = String(remaining);
     const intervalId = setInterval(() => {
@@ -497,6 +620,8 @@
       spectatorToggleBtn.style.display = 'none';
       spectatorToggleBtn.classList.add('hidden');
       if (restartBtn) restartBtn.style.display = 'none';
+      if (textReactionBtn) textReactionBtn.style.display = 'none';
+      hideTextReactionInput();
       const spectatorCountText = document.querySelector('#spectator-count-label .spectator-count-text');
       if (spectatorCountText) spectatorCountText.textContent = '';
       if (rankLabelsToggleBtn) rankLabelsToggleBtn.style.display = 'none';
@@ -539,6 +664,7 @@
       passPositionToggleBtn.style.display = state.spectator === true ? 'none' : '';
       passPositionToggleBtn.classList.toggle('active', passPositionAbove);
     }
+    if (textReactionBtn) textReactionBtn.style.display = state.spectator === true ? 'none' : '';
 
     const g = state;
     const players = g.players || [];
@@ -607,10 +733,14 @@
         const wantsToPlay = state.wants_to_play !== false;
         spectatorToggleBtn.textContent = wantsToPlay ? 'You will join next game' : "You won't join next game";
         spectatorToggleBtn.classList.toggle('subdued', !wantsToPlay);
+        if (reactionLaughBtn) reactionLaughBtn.style.display = 'none';
+        if (reactionAngryBtn) reactionAngryBtn.style.display = 'none';
       } else {
         spectatorToggleBtn.style.display = 'none';
         spectatorToggleBtn.classList.add('hidden');
         spectatorToggleBtn.classList.remove('subdued');
+        if (reactionLaughBtn) reactionLaughBtn.style.display = '';
+        if (reactionAngryBtn) reactionAngryBtn.style.display = '';
       }
       return;
     }
@@ -625,10 +755,14 @@
       spectatorToggleBtn.textContent = wantsToPlay ? 'You will join next game' : "You won't join next game";
       spectatorToggleBtn.classList.toggle('subdued', !wantsToPlay);
       passBtn.style.display = 'none';
+      if (reactionLaughBtn) reactionLaughBtn.style.display = 'none';
+      if (reactionAngryBtn) reactionAngryBtn.style.display = 'none';
     } else {
       spectatorToggleBtn.style.display = 'none';
       spectatorToggleBtn.classList.add('hidden');
       spectatorToggleBtn.classList.remove('subdued');
+      if (reactionLaughBtn) reactionLaughBtn.style.display = '';
+      if (reactionAngryBtn) reactionAngryBtn.style.display = '';
     }
     renderHand(g, myIdx, isMyTurn, validPlays);
     renderPassButton(g, myIdx, isMyTurn);
@@ -700,7 +834,8 @@
 
   function renderPile(g, isMyTurn) {
     pileEl.innerHTML = '';
-    const plays = g.round?.pile?.plays || [];
+    const isClearing = pileClearingPlays != null && pileClearingPlays.length > 0;
+    const plays = isClearing ? pileClearingPlays : (g.round?.pile?.plays || []);
     const layers = [];
     if (plays.length > 1) {
       const underneath = plays.slice(0, -1);
@@ -723,12 +858,31 @@
         div.style.setProperty('--pile-card-rot', pileCardRotation(playIdx, i, card) + 'deg');
         div.appendChild(cardFrontContent(card));
         div.style.marginLeft = i === 0 ? '0' : '-31px';
+        if (isClearing) {
+          const rotDeg = pileCardRotation(playIdx, i, card);
+          requestAnimationFrame(() => {
+            const pileRect = pileEl.getBoundingClientRect();
+            const cardRect = div.getBoundingClientRect();
+            const pileCx = pileRect.left + pileRect.width / 2;
+            const pileCy = pileRect.top + pileRect.height / 2;
+            const cardCx = cardRect.left + cardRect.width / 2;
+            const cardCy = cardRect.top + cardRect.height / 2;
+            const dx = pileCx - cardCx;
+            const dy = pileCy - cardCy;
+            const angleRad = (rotDeg * Math.PI) / 180;
+            const tx = dx * Math.cos(angleRad) + dy * Math.sin(angleRad);
+            const ty = -dx * Math.sin(angleRad) + dy * Math.cos(angleRad);
+            div.style.setProperty('--pile-card-clear-tx', tx + 'px');
+            div.style.setProperty('--pile-card-clear-ty', ty + 'px');
+            requestAnimationFrame(() => div.classList.add('pile-card-clearing'));
+          });
+        }
         layer.appendChild(div);
       });
       pileEl.appendChild(layer);
     });
 
-    if (pendingPlay.length > 0) {
+    if (pendingPlay.length > 0 && !isClearing) {
       const layer = document.createElement('div');
       layer.className = 'pile-layer current pending-play';
       pendingPlay.forEach((card, i) => {
@@ -923,6 +1077,52 @@
         ws.send(JSON.stringify({ type: 'tag_dick', target_player_id: targetId }));
       }
     });
+    const pending = reactionsPending.find(r => String(r.playerId) === String(p.id));
+    if (pending) {
+      const wrapper = div.querySelector('.cards-spread-wrapper');
+      if (wrapper) {
+        const overlay = document.createElement('div');
+        overlay.className = 'player-reaction-emoji';
+        overlay.textContent = pending.emoji;
+        wrapper.appendChild(overlay);
+        const pid = String(p.id);
+        const em = pending.emoji;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => overlay.classList.add('reaction-emoji-large'));
+        });
+        setTimeout(() => {
+          overlay.classList.remove('reaction-emoji-large');
+          overlay.classList.add('reaction-emoji-shrink');
+          setTimeout(() => {
+            reactionsPending = reactionsPending.filter(r => String(r.playerId) !== pid || r.emoji !== em);
+            overlay.remove();
+          }, 500);
+        }, 500 + 2500);
+      }
+    }
+    const textPending = textReactionsPending.find(r => String(r.playerId) === String(p.id));
+    if (textPending) {
+      const wrapper = div.querySelector('.cards-spread-wrapper');
+      if (wrapper) {
+        const bubble = document.createElement('div');
+        bubble.className = 'player-reaction-bubble';
+        bubble.textContent = textPending.text;
+        wrapper.appendChild(bubble);
+        const pid = String(p.id);
+        const txt = textPending.text;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => bubble.classList.add('reaction-bubble-large'));
+        });
+        setTimeout(() => {
+          bubble.classList.remove('reaction-bubble-large');
+          bubble.classList.add('reaction-bubble-shrink');
+          setTimeout(() => {
+            textReactionsPending = textReactionsPending.filter(r => String(r.playerId) !== pid || r.text !== txt);
+            bubble.remove();
+          }, 500);
+        }, 500 + 2500);
+      }
+    }
     return div;
   }
 
@@ -1349,6 +1549,92 @@
     if (!myAccoladeEl.classList.contains('clickable')) return;
     ws.send(JSON.stringify({ type: 'tag_dick', target_player_id: playerId }));
   });
+
+  function hideReactionFlyUp() {
+    if (reactionFlyup) {
+      reactionFlyup.classList.add('hidden');
+      reactionFlyup.setAttribute('aria-hidden', 'true');
+    }
+    if (reactionFlyupPointerUp) {
+      document.removeEventListener('pointerup', reactionFlyupPointerUp);
+      reactionFlyupPointerUp = null;
+    }
+  }
+
+  let reactionFlyupPointerUp = null;
+  let reactionFlyupAnchor = null;
+
+  function showReactionFlyUp(anchorBtn, emojis, align) {
+    if (!reactionFlyup || !anchorBtn) return;
+    reactionFlyup.innerHTML = '';
+    reactionFlyupAnchor = anchorBtn;
+    emojis.forEach((emoji) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'reaction-flyup-emoji';
+      btn.textContent = emoji;
+      btn.dataset.emoji = emoji;
+      reactionFlyup.appendChild(btn);
+    });
+    const rect = anchorBtn.getBoundingClientRect();
+    if (align === 'right') {
+      reactionFlyup.style.left = rect.right + 'px';
+      reactionFlyup.style.transform = 'translate(-100%, -100%)';
+    } else {
+      reactionFlyup.style.left = rect.left + 'px';
+      reactionFlyup.style.transform = 'translate(0, -100%)';
+    }
+    reactionFlyup.style.top = (rect.top - 8) + 'px';
+    reactionFlyup.classList.remove('hidden');
+    reactionFlyup.removeAttribute('aria-hidden');
+    reactionFlyupPointerUp = (e) => {
+      const emojiBtn = e.target.closest('.reaction-flyup-emoji');
+      if (emojiBtn && reactionFlyup && reactionFlyup.contains(emojiBtn)) {
+        const emoji = emojiBtn.dataset.emoji || emojiBtn.textContent;
+        if (emoji && ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'reaction', emoji: emoji }));
+        }
+        hideReactionFlyUp();
+        return;
+      }
+      if (reactionFlyupAnchor && reactionFlyupAnchor.contains(e.target)) return;
+      hideReactionFlyUp();
+    };
+    setTimeout(() => {
+      document.addEventListener('pointerup', reactionFlyupPointerUp);
+    }, 0);
+  }
+
+  function setupReactionLongPress(btn, emojis, align) {
+    if (!btn) return;
+    const defaultEmoji = emojis[0];
+    btn.addEventListener('click', () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'reaction', emoji: defaultEmoji }));
+      }
+      hideReactionFlyUp();
+    });
+    const onDown = () => {
+      reactionLongPressTimer = setTimeout(() => {
+        reactionLongPressTimer = null;
+        showReactionFlyUp(btn, emojis, align || 'left');
+      }, REACTION_LONG_PRESS_MS);
+    };
+    const onUp = () => {
+      if (reactionLongPressTimer) {
+        clearTimeout(reactionLongPressTimer);
+        reactionLongPressTimer = null;
+      }
+    };
+    const onLeave = () => onUp();
+    btn.addEventListener('pointerdown', onDown);
+    btn.addEventListener('pointerup', onUp);
+    btn.addEventListener('pointerleave', onLeave);
+    btn.addEventListener('pointercancel', onUp);
+  }
+
+  setupReactionLongPress(reactionLaughBtn, REACTION_HAPPY_EMOJIS, 'left');
+  setupReactionLongPress(reactionAngryBtn, REACTION_ANGRY_EMOJIS, 'right');
 
   passBtn.addEventListener('click', () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;

@@ -451,6 +451,27 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                         else:
                             save_room(room)
                             await broadcast_state(room_name, room_obj=room)
+                    elif cmd == "reaction":
+                        emoji = data.get("emoji")
+                        allowed = ("😂", "😉", "😆", "🙏", "😁", "😠", "😤", "😡", "🤬", "🤯")
+                        in_game = room.current_game and any(
+                            str(p.id) == str(player_id) for p in room.current_game.players
+                        )
+                        if emoji in allowed and in_game:
+                            await broadcast_except(
+                                room_name, player_id,
+                                {"type": "reaction", "player_id": player_id, "emoji": emoji},
+                            )
+                    elif cmd == "text_reaction":
+                        text = (data.get("text") or "").strip()
+                        in_game_txt = room.current_game and any(
+                            str(p.id) == str(player_id) for p in room.current_game.players
+                        )
+                        if text and len(text) <= 32 and in_game_txt:
+                            await broadcast_except(
+                                room_name, player_id,
+                                {"type": "text_reaction", "player_id": player_id, "text": text},
+                            )
                 except json.JSONDecodeError as e:
                     await ws.send_json({"type": "error", "message": str(e)})
             elif msg.type == WSMsgType.ERROR:
@@ -746,7 +767,7 @@ async def handle_restart_game(room: GameRoom, player_id: str) -> str | None:
 
 
 async def start_next_game_after_delay(room: GameRoom):
-    await asyncio.sleep(13)  # Wait for game results window (3s delay + 10s display)
+    await asyncio.sleep(35)  # Wait before starting next game (e.g. results window, breather)
     PENDING_NEXT_GAME_TASKS.pop(room.name, None)  # We're running; no longer pending
     room = load_room(room.name)
     if not room:
