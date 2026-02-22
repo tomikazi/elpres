@@ -1201,6 +1201,11 @@ body.spectator-view #pile-drop-zone {
 
 #score-overlay {
   background: transparent;
+  pointer-events: none; /* allow interaction with game UI (emojis, messages, etc.) behind */
+}
+
+#score-overlay .score-panel {
+  pointer-events: auto; /* panel still captures so clicks on it don’t hit elements behind */
 }
 
 #score-overlay.hidden, #lobby-overlay.hidden, #waiting-disconnected-overlay.hidden, #auto-pass-overlay.hidden {
@@ -1210,6 +1215,15 @@ body.spectator-view #pile-drop-zone {
 #auto-pass-overlay {
   background: transparent;
   pointer-events: auto;
+}
+
+#waiting-disconnected-overlay {
+  background: transparent;
+  pointer-events: none; /* allow interaction with game UI behind */
+}
+
+#waiting-disconnected-overlay .waiting-disconnected-panel {
+  pointer-events: auto; /* panel still captures so clicks on it don’t hit elements behind */
 }
 
 .waiting-disconnected-panel {
